@@ -1,4 +1,4 @@
-// ===========================================================================
+// ============================================================================
 // miniapp-api.js — Telegram Mini App backend ("library cart") for the content bot
 //
 //   GET  /api/content?v=<cachedVersion>   -> slim content tree read from the published KV snapshot
@@ -12,7 +12,7 @@
 //   * Few Telegram calls per send: all compatible photos/videos, documents, or audios in the
 //     each compatible category is grouped into ONE sendMediaGroup call; the cart allows up to 10 records + 10 files.
 //   * Telegram file_ids are NEVER sent to the browser. The client only knows a short hash (k).
-// ===========================================================================
+// ============================================================================
 
 import { normalizeSearchMeta } from "../public/app/search-core.js";
 
@@ -24,7 +24,7 @@ const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;     // reopen the app from the bot af
 const SEND_COOLDOWN_MS = 5000;                 // min gap between two sends of the same user (per isolate)
 const SEND_HOURLY_CAP = 40;                    // max sends / user / hour (per isolate)
 const GAP_BETWEEN_TG_CALLS_MS = 350;           // wall-clock pause only (no CPU), keeps Telegram flood limits happy
-const SLIM_BUILD_REV = 3;                      // rev 3: adds `sm` (structured search metadata) per file
+const SLIM_BUILD_REV = 4;                      // rev 4: `sm` preserves all registered search fields
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const enc = new TextEncoder();
@@ -144,7 +144,7 @@ function buildSlim(db) {
       if (f.caption) item.c = String(f.caption).slice(0, 300);
       if (f.file_name) item.nm = String(f.file_name).slice(0, 200);
       if (f.file_size) item.s = Number(f.file_size) || undefined;
-      // Structured search metadata {s,t,n}. Optional: legacy files simply have none.
+      // Generic structured search metadata (all registered fields). Optional for legacy files.
       // Only the normalized machine data is shipped (the admin's raw search_name stays server-side),
       // and Telegram file_ids are still never exposed.
       const sm = normalizeSearchMeta(f.search_meta);

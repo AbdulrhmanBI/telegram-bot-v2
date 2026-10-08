@@ -5,7 +5,7 @@
 //   - ADMIN content viewing/editing uses the published KV snapshot plus a per-admin D1 draft/session.
 //   - Authoritative content-table writes occur on explicit admin Save/Force Save (and recovery/admin operations).
 //   - Block status: RAM (2 min) -> Cache API -> D1 primary-key read on a miss (bans are authoritative; a D1 error is never cached).
-// ===========================================================================
+// ============================================================================
 // Cloudflare Worker (Modules) — Production Content Engine
 // Authoritative Store: Cloudflare D1 (SQL)
 // Fast Edge Cache: Cloudflare KV (DB: key "db")
@@ -13,7 +13,7 @@
 //           Strict Admin Auth, Self-Healing Sync, Disaster Recovery /restore,
 //           Full Telegram Media Browser, Built-in Calculator.
 //           ADMIN CONTENT FLOW: published cache -> per-admin D1 draft/session -> D1 Save -> published cache sync.
-// ===========================================================================
+// ============================================================================
 // Bindings (wrangler.toml):
 //   KV Namespaces:
 //     DB                 // Global Content Cache (keys: "db", "db:backup:last")
@@ -35,7 +35,7 @@
 
 import { handleMiniApi } from "./miniapp-api.js";
 import {
-  SEARCH_DICTIONARY, parseAdminSearchInput, normalizeSearchMeta, describeMeta, codesHelpText
+  SEARCH_DICTIONARY, SEARCH_FIELDS, parseAdminSearchInput, normalizeSearchMeta, orderedSearchMeta, describeMeta, codesHelpText
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -3551,7 +3551,7 @@ async function __contentEnsureGuard(env) {
 //   the same Telegram file can legitimately live in several folders with different identities
 //   (e.g. the same slides under "Lec 1" and "Lec 2", or one exam under two subjects).
 //     search_name  TEXT  raw text the admin typed, e.g. "[MA].s [Lec].t [2].n"
-//     search_meta  TEXT  normalized JSON, e.g. {"s":"MA","t":"LEC","n":2}
+//     search_meta  TEXT  normalized JSON, e.g. {"s":"MA","t":"LEC","n":2}; extra registered fields are preserved
 //   Both are OPTIONAL. Files without them behave exactly as before and are simply not part of
 //   the structured search. The original file_name / caption are never touched.
 //   The columns are added lazily ONLY if they are missing (see migrations/0001_search_meta.sql
@@ -3583,13 +3583,9 @@ async function __ensureSearchColumns(env) {
 
 // Canonical JSON text for a meta object (stable key order => no phantom diffs).
 function __searchMetaJson(meta) {
-  const m = normalizeSearchMeta(meta);
-  if (!m) return null;
-  const o = {};
-  if (m.s != null) o.s = m.s;
-  if (m.t != null) o.t = m.t;
-  if (m.n != null) o.n = m.n;
-  return JSON.stringify(o);
+  // All fields pass through the shared registry/normalizer; no s/t/n whitelist.
+  const m = orderedSearchMeta(meta);
+  return m ? JSON.stringify(m) : null;
 }
 function __searchMetaParse(text) {
   if (text == null || text === "") return null;
@@ -9094,8 +9090,13 @@ function __setFileSearch(f, name, meta) {
 }
 
 function __searchShort(meta) {
-  if (!meta) return "";
-  return [meta.s, meta.t, meta.n != null ? (Array.isArray(meta.n) ? meta.n[0] + "-" + meta.n[meta.n.length - 1] : meta.n) : null].filter(v => v != null && v !== "").join("·");
+  const clean = orderedSearchMeta(meta);
+  if (!clean) return "";
+  return Object.entries(clean).map(([key, value]) => {
+    const def = SEARCH_FIELDS[key];
+    const shown = Array.isArray(value) ? (value.length > 1 && value.every((n, i) => i === 0 || n === value[i - 1] + 1) ? value[0] + "-" + value[value.length - 1] : value.join(",")) : String(value);
+    return (def?.role === "subject" || def?.role === "type" ? "" : (def?.label ? def.label + ":" : key + ":")) + shown;
+  }).join("·");
 }
 
 function __searchFileLabel(f) {
