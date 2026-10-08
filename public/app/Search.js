@@ -1,4 +1,4 @@
-// ===========================================================================
+// ==========================================================================
 // search-core.js — shared, dependency-free search logic (ES module)
 //
 // Used by BOTH sides so there is exactly ONE source of truth:
@@ -13,7 +13,7 @@
 // No fuzzy guessing: a word only means something if it is an explicit alias in
 // SEARCH_DICTIONARY. The only "looseness" is prefix completion of the word the
 // user is still typing (so "m" / "ma l" narrow progressively).
-// ===========================================================================
+// ==========================================================================
 
 export const SEARCH_CORE_REV = 1;
 
