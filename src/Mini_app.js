@@ -1,4 +1,4 @@
-// ============================================================================
+// ===========================================================================
 // miniapp-api.js — Telegram Mini App backend ("library cart") for the content bot
 //
 //   GET  /api/content?v=<cachedVersion>   -> slim content tree read from the published KV snapshot
@@ -12,7 +12,7 @@
 //   * Few Telegram calls per send: all compatible photos/videos, documents, or audios in the
 //     each compatible category is grouped into ONE sendMediaGroup call; the cart allows up to 10 records + 10 files.
 //   * Telegram file_ids are NEVER sent to the browser. The client only knows a short hash (k).
-// ============================================================================
+// ===========================================================================
 
 import { normalizeSearchMeta } from "../public/app/search-core.js";
 
