@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=yes,maximum-scale=5,minimum-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Library</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#f4f6fb;--card:#ffffff;--text:#131a2a;--muted:#667085;--line:#e4e8f0;
+  --accent:#2563eb;--accent-soft:#e8f0ff;--accent-text:#ffffff;
+  --ok:#12a05c;--danger:#d92d20;--shadow:0 6px 24px rgba(16,24,40,.12);
+  --radius:14px;
+}
+:root[data-theme="dark"]{
+  --bg:#0e1320;--card:#171e30;--text:#e8ecf6;--muted:#93a0b8;--line:#26304a;
+  --accent:#5b8def;--accent-soft:#1d2b4d;--accent-text:#0b1220;
+  --ok:#34c78a;--danger:#f0645a;--shadow:0 6px 24px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Arabic","Noto Naskh Arabic",Tahoma,Arial,sans-serif;font-size:15px;line-height:1.45;
+  padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* header */
+.top{position:sticky;top:0;z-index:20;background:var(--bg);padding:10px 12px 8px;padding-top:calc(10px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
+.bar{display:flex;gap:8px;align-items:center}
+.search{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none}
+.search:focus{border-color:var(--accent)}
+.iconbtn{flex:none;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-size:16px}
+.crumbs{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:13px;color:var(--muted)}
+.crumb{background:none;border:0;padding:2px 4px;color:var(--accent);border-radius:6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb.cur{color:var(--muted);cursor:default}
+.sep{opacity:.5}
+
+main{padding:12px;max-width:900px;margin:0 auto}
+h2{margin:6px 0 2px;font-size:20px}
+.meta{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+.sec{margin-top:18px}
+.sec-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.sec-h h3{margin:0;font-size:14px;color:var(--muted);font-weight:600}
+.link{background:none;border:0;color:var(--accent);padding:6px 8px;border-radius:8px;font-size:13px}
+
+/* folders */
+.rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row;gap:8px}
+/* Source row boundaries are ignored visually in the Mini App.
+   The folder order is flattened into one continuous 2-column grid.
+   The bot data/layout is NOT changed. */
+.node{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:13px;text-align:start;min-height:64px;min-width:0;display:flex;flex-direction:column;gap:4px}
+.node:active{transform:scale(.99)}
+.node b{font-weight:650;overflow-wrap:anywhere}
+.node small{color:var(--muted);font-size:12px}
+
+/* files */
+.files{display:flex;flex-direction:column;gap:8px}
+.file{width:100%;display:flex;gap:11px;align-items:center;text-align:start;background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:11px 12px}
+.file[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.chk{flex:none;width:24px;height:24px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:14px;color:transparent}
+.file[aria-pressed="true"] .chk{background:var(--accent);border-color:var(--accent);color:var(--accent-text)}
+.ficon{flex:none;font-size:22px;width:30px;text-align:center}
+.fbody{min-width:0;flex:1}
+.ftitle{font-weight:600;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fsub{font-size:12px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+
+/* search results */
+.sub-h{margin:20px 2px 4px;font-size:16px;font-weight:700;overflow-wrap:anywhere}
+.sub-h:first-of-type{margin-top:6px}
+.grp{margin:12px 2px 6px;font-size:13px;font-weight:650;color:var(--accent)}
+.hint{margin-top:6px;font-size:13px;color:var(--muted)}
+
+/* notes / urls */
+.note,.url{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.note a,.url a{color:var(--accent);word-break:break-all;text-decoration:underline;text-underline-offset:2px}
+.empty{padding:28px 12px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:var(--radius)}
+.skel{height:64px;border-radius:var(--radius);background:linear-gradient(90deg,var(--card),var(--line),var(--card));background-size:200% 100%;animation:sk 1.2s infinite;margin-bottom:8px}
+@keyframes sk{to{background-position:-200% 0}}
+.banner{background:var(--accent-soft);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;font-size:13px}
+.banner.err{background:color-mix(in srgb,var(--danger) 14%,var(--card));}
+
+/* in-app external page viewer — direct iframe, no Worker proxy */
+.webview{position:fixed;inset:0;z-index:90;background:var(--bg);display:none;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.webview.show{display:flex}
+.webview-h{display:flex;align-items:center;gap:6px;padding:9px 8px;border-bottom:1px solid var(--line);background:var(--bg);flex:none}
+.webview-title{flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600}
+.webview-btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:8px 9px;font-size:12px;white-space:nowrap}
+.webview-zoom{display:flex;gap:4px;align-items:center;flex:none}
+.webview-frame-wrap{position:relative;flex:1;min-height:0;overflow:auto;background:#fff;touch-action:pan-x pan-y pinch-zoom;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.webview-frame{display:block;width:100%;height:100%;min-width:100%;min-height:100%;border:0;background:#fff;transform-origin:top left;touch-action:pan-x pan-y pinch-zoom;-webkit-overflow-scrolling:touch}
+.webview-note{position:absolute;left:10px;right:10px;bottom:10px;z-index:2;display:none;background:rgba(20,24,32,.82);color:#fff;border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.35;backdrop-filter:blur(6px)}
+.webview-note.show{display:block}
+
+/* cart bar + sheet */
+.cartbar{position:fixed;inset-inline:0;bottom:0;z-index:30;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));display:none}
+.cartbar.show{display:block}
+.cartbtn{width:100%;max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--accent);color:var(--accent-text);border:0;border-radius:14px;padding:14px 16px;font-weight:700;box-shadow:var(--shadow)}
+.pill{background:rgba(255,255,255,.22);border-radius:999px;padding:2px 10px;font-size:13px}
+:root[data-theme="dark"] .pill{background:rgba(0,0,0,.18)}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:none}
+.scrim.show{display:block}
+.sheet{position:fixed;inset-inline:0;bottom:0;z-index:50;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--shadow);max-height:86vh;display:none;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px)}
+.sheet.show{display:flex}
+.sheet-h{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+.sheet-h h3{margin:0;font-size:17px}
+.sheet-b{overflow:auto;padding:4px 12px 8px;flex:1}
+.sheet-f{display:flex;gap:8px;padding:10px 12px 12px;border-top:1px solid var(--line)}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:13px 16px;font-weight:600}
+.btn.primary{flex:1;background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+.btn:disabled{opacity:.55;cursor:default}
+.citem{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.citem .fbody{flex:1}
+.x{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:var(--accent-soft);color:var(--danger);font-size:16px}
+.done{text-align:center;padding:26px 12px}
+.done .big{font-size:44px}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:rot .7s linear infinite;vertical-align:-3px;margin-inline-end:6px}
+@keyframes rot{to{transform:rotate(360deg)}}
+.toast{position:fixed;inset-inline:0;bottom:calc(88px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;justify-content:center;pointer-events:none}
+.toast span{background:var(--text);color:var(--bg);padding:9px 14px;border-radius:12px;font-size:13px;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);transition:.18s}
+.toast.show span{opacity:1;transform:none}
+
+/* footer signature */
+.zm-footer{position:fixed;left:0;right:0;bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:29;padding:4px 12px 6px;text-align:center;color:var(--muted);font-size:11px;opacity:.65;letter-spacing:.2px;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--bg) 35%)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <input id="q" class="search" type="search" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="search">
+    <button id="themeBtn" class="iconbtn" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
+  </div>
+  <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
+</header>
+
+<main id="app"><div class="skel"></div><div class="skel"></div><div class="skel"></div></main>
+
+
+<div id="zmFooter" class="zm-footer">zaeem :)</div>
+<div id="cartbar" class="cartbar"><button id="openCart" class="cartbtn"></button></div>
+<div id="scrim" class="scrim"></div>
+<section id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"></section>
+<section id="webview" class="webview" aria-hidden="true">
+  <div class="webview-h">
+    <button id="webviewBack" class="webview-btn" type="button">← Back</button>
+    <div id="webviewTitle" class="webview-title" dir="ltr"></div>
+    <button id="webviewExternal" class="webview-btn" type="button">Open external</button>
+  </div>
+  <div class="webview-frame-wrap" id="webviewFrameWrap">
+    <iframe id="webviewFrame" class="webview-frame" title="Embedded page" loading="eager" allow="fullscreen; autoplay; clipboard-read; clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe>
+    <div id="webviewNote" class="webview-note">Some websites may block embedding or HTTP pages may be blocked by the Telegram HTTPS WebView.</div>
+  </div>
+</section>
+<div id="toast" class="toast" aria-live="polite"><span></span></div>
+
+<script type="module">
+import {
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText
+} from "./search-core.js?v=1";
+
+(() => {
+"use strict";
+
+/* ───────────── i18n ───────────── */
+const I18N = { en: {
+    title:"Library", search:"Search… e.g. ma lec 2", searchTry:"Try for example:  ma  ·  ma lec  ·  ma 2  ·  ma lec 2", capNote:"Showing the first {n} results — type more to narrow down.", root:"Home", folders:"Folders", files:"Files",
+    notes:"Notes", links:"Links", selectAll:"Select all", unselectAll:"Unselect all", copy:"Copy", copied:"Copied",
+    cart:"File cart", review:"Review & send", send:"Send to Telegram", sending:"Sending…", clear:"Clear",
+    empty:"This folder is empty.", noResults:"No results.", results:"results", items:"items", filesN:"files", foldersN:"folders",
+    maxRecords:"Up to {n} records.", maxFiles:"Up to {n} files.", addedRecords:"Only {a} records added (max {n}).", addedFiles:"Only {a} files added (max {n}).",
+    cartLimits:"Records: {r}/{mr} · Files: {f}/{mf}",
+    sentOk:"{n} files sent 🎉", sentHint:"Check your chat with the bot.", close:"Close", keep:"Keep browsing",
+    partial:"{f} file(s) could not be delivered, try again.", gone:"{m} file(s) no longer exist and were removed from your cart.",
+    cartEmpty:"Your cart is empty.", unavailable:"Unavailable file",
+    openFromBot:"Please open the library from inside the bot (library button or /app).",
+    e_unauthorized:"Could not verify your account. Reopen the library from the bot.",
+    e_expired:"Session expired. Close and reopen the library from the bot.",
+    e_banned:"Access is not available for your account.", e_not_member:"You must join the required group first.",
+    e_membership_unavailable:"Can't verify membership right now, try again shortly.",
+    e_content_unavailable:"Content is unavailable right now, try again shortly.",
+    e_cooldown:"Wait {s}s and try again.", e_busy:"A send is already in progress.",
+    e_rate_limited:"Hourly send limit reached. Try again later.",
+    e_delivery_failed:"Couldn't deliver. Make sure you pressed Start in the bot and haven't blocked it.",
+    e_none_available:"Those files are no longer available.", e_network:"Connection problem, try again.", e_generic:"Something went wrong, try again.",
+    offline:"Showing a saved copy — you're offline.", updated:"Content updated."
+  } };
+
+/* ───────────── state ───────────── */
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const initData = tg && tg.initData ? tg.initData : "";
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch(_) { return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(_) {} }
+};
+const MAX_RECORD_ITEMS = 10;
+const MAX_FILE_ITEMS = 10;
+const MAX_TOTAL_ITEMS = MAX_RECORD_ITEMS + MAX_FILE_ITEMS;
+const isRecordType = (type) => type === "voice" || type === "audio";
+function defaultTheme(){
+  return (tg && tg.colorScheme === "dark") || matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+const savedTheme = LS.get("lib:theme", null);
+const initialTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : defaultTheme();
+const S = {
+  lang: "en",
+  theme: initialTheme,
+  data: null, version: "", max: MAX_TOTAL_ITEMS, parent: {},
+  cart: LS.get("lib:cart", []),
+  cur: null, trail: [], query: "", sending: false, sheet: null, banner: null,
+  sindex: [], sctx: null          // local structured-search index (built once per content load)
+};
+const T = (k, p) => {
+  let s = I18N.en[k] || k;
+  if (p) for (const x in p) s = s.replace("{" + x + "}", p[x]);
+  return s;
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+const ICON = { audio:"🎧", video:"🎥", photo:"🖼️", document:"📄", sticker:"🏷️", voice:"🎙️" };
+const icon = (t) => ICON[t] || "📎";
+const haptic = (k) => { try { if (!tg || !tg.HapticFeedback) return; k === "ok" ? tg.HapticFeedback.notificationOccurred("success") : k === "warn" ? tg.HapticFeedback.notificationOccurred("warning") : tg.HapticFeedback.impactOccurred("light"); } catch(_) {} };
+
+/* ───────────── theme ───────────── */
+function applyTheme(){
+  const dark = S.theme === "dark";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  $("themeBtn").innerHTML = dark
+    ? '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.86 4.86l1.56 1.56M17.58 17.58l1.56 1.56M2.5 12h2.2M19.3 12h2.2M4.86 19.14l1.56-1.56M17.58 6.42l1.56-1.56"></path></svg>'
+    : '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15.2A8.5 8.5 0 0 1 8.8 3 8.5 8.5 0 1 0 21 15.2Z"></path></svg>';
+  $("themeBtn").setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
+  $("themeBtn").title = dark ? "Switch to light mode" : "Switch to dark mode";
+  try {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    if (tg) {
+      tg.setHeaderColor(bg);
+      tg.setBackgroundColor(bg);
+      tg.setBottomBarColor && tg.setBottomBarColor(bg);
+    }
+  } catch(_) {}
+}
+$("themeBtn").onclick = () => {
+  S.theme = S.theme === "dark" ? "light" : "dark";
+  LS.set("lib:theme", S.theme);
+  applyTheme();
+};
+
+document.documentElement.lang = "en";
+document.documentElement.dir = "ltr";
+document.title = T("title");
+$("q").placeholder = T("search");
+
+/* ───────────── data helpers ───────────── */
+const node = (id) => S.data && S.data.nodes[String(id)];
+function indexParents(){
+  S.parent = {};
+  for (const [id, n] of Object.entries(S.data.nodes)) for (const row of n.r || []) for (const c of row) if (!(c in S.parent)) S.parent[c] = id;
+  buildSearchIndex();
+}
+// Structured search index: only files that carry metadata (`sm`) take part. Built once per content
+// load/update; typing never touches the network, KV or D1.
+function buildSearchIndex(){
+  const entries = [];
+  for (const [id, n] of Object.entries(S.data.nodes)) {
+    (n.f || []).forEach((f, i) => {
+      const sm = f.sm;
+      if (!sm || (!sm.s && !sm.t && sm.n == null)) return;
+      entries.push({
+        id, i, f,
+        s: sm.s || null, t: sm.t || null,
+        n: sm.n == null ? null : (Array.isArray(sm.n) ? sm.n : [sm.n]),
+        hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || ""))
+      });
+    });
+  }
+  S.sindex = entries;
+  S.sctx = buildContext(entries);
+}
+function chain(id){
+  const out = []; let cur = String(id), g = 0, root = String(S.data.root);
+  while (g++ < 60) { out.unshift(cur); if (cur === root) break; const p = S.parent[cur]; if (!p) break; cur = p; }
+  return out;
+}
+const pathNames = (id) => chain(id).slice(1).map((x) => (node(x) || {}).n || x);
+const fmtSize = (b) => !b ? "" : b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(1) + " MB";
+const ftitle = (f, i) => f.nm || (f.c ? f.c.split("\n")[0] : "") || (f.t + " " + (i + 1));
+const linkifyText = (value) => {
+  const escaped = esc(value);
+  return escaped.replace(
+    /((?:https?:\/\/|tg:\/\/|mailto:)[^\s<]+)/gi,
+    (url) => {
+      const trailing = url.match(/[),.;!?]+$/)?.[0] || "";
+      const clean = trailing ? url.slice(0, -trailing.length) : url;
+      return '<a href="' + clean + '" data-ext="1" rel="noopener noreferrer">' + clean + '</a>' + trailing;
+    }
+  );
+};
+const keyOf = (n, k) => n + "|" + k;
+const inCart = (n, k) => S.cart.some((c) => c.n === String(n) && c.k === k);
+function findFile(n, k){ const nd = node(n); if (!nd || !nd.f) return null; const i = nd.f.findIndex((f) => f.k === k); return i < 0 ? null : { f: nd.f[i], i }; }
+
+function cartCounts(){
+  let records = 0, files = 0;
+  for (const c of S.cart) {
+    const x = findFile(c.n, c.k);
+    if (!x) continue;
+    if (isRecordType(x.f.t)) records++;
+    else files++;
+  }
+  return { records, files };
+}
+
+function pruneCart(){
+  const before = S.cart.length;
+  const next = [];
+  let records = 0, files = 0;
+  for (const c of S.cart) {
+    const x = findFile(c.n, c.k);
+    if (!x) continue;
+    if (isRecordType(x.f.t)) {
+      if (records >= MAX_RECORD_ITEMS) continue;
+      records++;
+    } else {
+      if (files >= MAX_FILE_ITEMS) continue;
+      files++;
+    }
+    next.push(c);
+  }
+  S.cart = next;
+  LS.set("lib:cart", S.cart);
+  return before - S.cart.length;
+}
+
+/* ───────────── toast ───────────── */
+let toastT = 0;
+function toast(msg){ const el = $("toast"); el.firstElementChild.textContent = msg; el.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 2200); }
+
+/* ───────────── API ───────────── */
+async function api(path, opt){
+  opt = opt || {};
+  let res;
+  try { res = await fetch(path, { method: opt.method || "GET", body: opt.body, headers: Object.assign({ "x-tg-init": initData }, opt.headers || {}) }); }
+  catch (_) { return { ok: false, error: "network" }; }
+  let j = null; try { j = await res.json(); } catch (_) {}
+  return j || { ok: false, error: "generic" };
+}
+const errText = (r) => T("e_" + (r && r.error ? r.error : "generic"), { s: r && r.retry ? r.retry : 5 }) || T("e_generic");
+
+async function loadContent(){
+  const cached = LS.get("lib:content", null);
+  if (cached && cached.data && cached.v) {
+    S.data = cached.data; S.version = cached.v; S.max = MAX_TOTAL_ITEMS;
+    indexParents(); pruneCart(); if (!S.cur || !node(S.cur)) S.cur = String(S.data.root); renderAll();
+  }
+  if (!initData) { if (!S.data) showFatal(T("openFromBot")); return; }
+  const r = await api("/api/content?v=" + encodeURIComponent(S.version || ""));
+  if (r && r.ok && r.same) return;
+  if (r && r.ok && r.nodes) {
+    const had = !!S.data;
+    S.data = r; S.version = r.v; S.max = MAX_TOTAL_ITEMS;
+    LS.set("lib:content", { v: r.v, data: r });
+    indexParents();
+    const gone = pruneCart();
+    if (!S.cur || !node(S.cur)) { S.cur = String(r.root); S.trail = []; }
+    if (gone) S.banner = { t: T("gone", { m: gone }) }; else if (had) S.banner = { t: T("updated") };
+    renderAll();
+    return;
+  }
+  if (r && r.error === "network" && S.data) { S.banner = { t: T("offline") }; renderAll(); return; }
+  if (!S.data) showFatal(errText(r)); else { S.banner = { t: errText(r), err: 1 }; renderAll(); }
+}
+function showFatal(msg){ $("app").innerHTML = '<div class="empty">' + esc(msg) + "</div>"; $("crumbs").innerHTML = ""; }
+
+/* ───────────── navigation ───────────── */
+function open(id, push = true){
+  id = String(id); if (!node(id)) return;
+  if (push && id !== S.cur) S.trail.push(S.cur);
+  S.cur = id; S.query = ""; $("q").value = "";
+  renderAll(); window.scrollTo(0, 0);
+}
+function back(){
+  if (S.query) { S.query = ""; $("q").value = ""; renderAll(); return true; }
+  if (S.sheet) { closeSheet(); return true; }
+  if (S.trail.length) { open(S.trail.pop(), false); return true; }
+  const p = S.parent[S.cur]; if (p) { open(p, false); return true; }
+  return false;
+}
+function syncBackButton(){
+  if (webviewUrl) { try { tg && tg.BackButton && tg.BackButton.show(); } catch(_) {} return; }
+  if (!tg || !tg.BackButton) return;
+  const can = !!(S.query || S.sheet || S.trail.length || (S.cur && S.cur !== String(S.data && S.data.root)));
+  try { can ? tg.BackButton.show() : tg.BackButton.hide(); } catch(_) {}
+}
+if (tg && tg.BackButton) tg.BackButton.onClick(() => back());
+
+/* ───────────── cart ops ───────────── */
+function persist(){ LS.set("lib:cart", S.cart); }
+function addCapacityMessage(kind, limit){
+  toast(kind === "record" ? T("maxRecords", { n: limit }) : T("maxFiles", { n: limit }));
+}
+function toggle(n, k){
+  n = String(n);
+  const ix = S.cart.findIndex((c) => c.n === n && c.k === k);
+  if (ix >= 0) { S.cart.splice(ix, 1); haptic(); }
+  else {
+    const x = findFile(n, k);
+    if (!x) return;
+    const counts = cartCounts();
+    if (isRecordType(x.f.t)) {
+      if (counts.records >= MAX_RECORD_ITEMS) { addCapacityMessage("record", MAX_RECORD_ITEMS); haptic("warn"); return; }
+    } else {
+      if (counts.files >= MAX_FILE_ITEMS) { addCapacityMessage("file", MAX_FILE_ITEMS); haptic("warn"); return; }
+    }
+    S.cart.push({ n, k }); haptic();
+  }
+  persist(); renderAll(true);
+}
+function selectAllHere(){
+  const nd = node(S.cur); if (!nd || !nd.f) return;
+  const all = nd.f.every((f) => inCart(S.cur, f.k));
+  if (all) {
+    S.cart = S.cart.filter((c) => !(c.n === String(S.cur) && nd.f.some((f) => f.k === c.k)));
+    persist(); renderAll(true); return;
+  }
+  const counts = cartCounts();
+  let addedRecords = 0, addedFiles = 0;
+  for (const f of nd.f) {
+    if (inCart(S.cur, f.k)) continue;
+    if (isRecordType(f.t)) {
+      if (counts.records + addedRecords >= MAX_RECORD_ITEMS) continue;
+      S.cart.push({ n: String(S.cur), k: f.k }); addedRecords++;
+    } else {
+      if (counts.files + addedFiles >= MAX_FILE_ITEMS) continue;
+      S.cart.push({ n: String(S.cur), k: f.k }); addedFiles++;
+    }
+  }
+  const skippedRecords = nd.f.some((f) => isRecordType(f.t) && !inCart(S.cur, f.k));
+  const skippedFiles = nd.f.some((f) => !isRecordType(f.t) && !inCart(S.cur, f.k));
+  if ((addedRecords || addedFiles)) haptic();
+  if (skippedRecords && counts.records + addedRecords >= MAX_RECORD_ITEMS) toast(T("addedRecords", { a: addedRecords, n: MAX_RECORD_ITEMS }));
+  if (skippedFiles && counts.files + addedFiles >= MAX_FILE_ITEMS) toast(T("addedFiles", { a: addedFiles, n: MAX_FILE_ITEMS }));
+  persist(); renderAll(true);
+}
+
+/* ───────────── rendering ───────────── */
+function renderCrumbs(){
+  if (!S.data) return;
+  const ids = chain(S.cur);
+  $("crumbs").innerHTML = ids.map((id, i) => {
+    const name = i === 0 ? T("root") : (node(id) || {}).n || id;
+    const last = i === ids.length - 1;
+    return '<button class="crumb' + (last ? " cur" : "") + '" data-go="' + esc(id) + '" dir="auto"' + (last ? " disabled" : "") + ">" + esc(name) + "</button>" + (last ? "" : '<span class="sep">/</span>');
+  }).join("");
+}
+
+function fileCard(n, f, i, sub){
+  const on = inCart(n, f.k);
+  const t = ftitle(f, i);
+  const meta = [f.t, fmtSize(f.s)].filter(Boolean).join(" · ");
+  const cap = f.nm && f.c ? f.c : "";
+  return '<button class="file" data-tg="' + esc(n) + "|" + esc(f.k) + '" aria-pressed="' + on + '">' +
+    '<span class="chk" aria-hidden="true">✓</span><span class="ficon" aria-hidden="true">' + icon(f.t) + "</span>" +
+    '<span class="fbody" dir="auto"><span class="ftitle">' + esc(t) + "</span>" +
+    '<span class="fsub">' + esc(sub || meta) + (cap && !sub ? " · " + esc(cap.slice(0, 80)) : "") + "</span></span></button>";
+}
+
+function renderNode(){
+  const nd = node(S.cur); if (!nd) return "";
+  const rows = nd.r || [], files = nd.f || [], notes = nd.o || [], urls = nd.u || [];
+  const childCount = rows.reduce((a, r) => a + r.length, 0);
+  let h = "";
+  if (S.banner) { h += '<div class="banner' + (S.banner.err ? " err" : "") + '">' + esc(S.banner.t) + "</div>"; S.banner = null; }
+  h += '<h2 dir="auto">' + esc(S.cur === String(S.data.root) ? T("title") : nd.n) + "</h2>";
+  h += '<div class="meta">' + [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ") + "</div>";
+
+  if (rows.length) {
+    // Flatten all child rows for Mini App display only, preserving exact order.
+    // This prevents a source row with one item from creating a visual gap.
+    const childIds = rows.flatMap((row) => Array.isArray(row) ? row : []);
+    h += '<div class="sec"><div class="rows">';
+    childIds.forEach((id, pos) => {
+      const c = node(id); if (!c) return;
+      const cc = (c.r || []).reduce((a, r) => a + r.length, 0), fc = (c.f || []).length;
+      const sub = [cc ? cc + " " + T("foldersN") : "", fc ? fc + " " + T("filesN") : ""].filter(Boolean).join(" · ");
+      h += '<button class="node" style="grid-column:auto" dir="auto" data-go="' + id + '"><b>' + esc(c.n) + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</button>";
+    });
+    h += "</div></div>";
+  }
+  if (files.length) {
+    const all = files.every((f) => inCart(S.cur, f.k));
+    h += '<div class="sec"><div class="sec-h"><h3>' + T("files") + '</h3><button class="link" data-act="all">' + (all ? T("unselectAll") : T("selectAll")) + '</button></div><div class="files">';
+    files.forEach((f, i) => { h += fileCard(S.cur, f, i); });
+    h += "</div></div>";
+  }
+  if (notes.length || urls.length) {
+    h += '<div class="sec"><div class="sec-h"><h3>' + T("notes") + "</h3></div>";
+    notes.forEach((x, i) => {
+      h += '<div class="note" dir="auto">' + linkifyText(x) + '</div>' +
+           '<div style="margin:-4px 0 8px"><button class="link" data-copy="' + i + '">' + T("copy") + "</button></div>";
+    });
+
+    // Keep standalone URL records clickable, but do not show a separate Links section.
+    const noteUrlSet = new Set();
+    notes.forEach((x) => {
+      const matches = String(x).match(/(?:https?:\/\/|tg:\/\/|mailto:)[^\s<]+/gi) || [];
+      for (const u of matches) noteUrlSet.add(u.replace(/[),.;!?]+$/g, "").toLowerCase());
+    });
+    urls.forEach((u) => {
+      const safe = /^(https?:\/\/|tg:\/\/|mailto:)/i.test(String(u)) ? String(u) : "";
+      if (!safe || noteUrlSet.has(safe.toLowerCase())) return;
+      h += '<div class="note" dir="auto"><a href="' + esc(safe) + '" data-ext="1" rel="noopener noreferrer">' + esc(safe) + "</a></div>";
+    });
+    h += "</div>";
+  }
+  if (!rows.length && !files.length && !notes.length && !urls.length) h += '<div class="empty">' + T("empty") + "</div>";
+  return h;
+}
+
+// Old plain-text search (folder names + file names/captions). Still used for words that are not
+// part of the dictionary, and as a fallback while content has no search metadata yet.
+function legacySearch(raw){
+  const q = String(raw).trim().toLowerCase();
+  const hitsN = [], hitsF = [];
+  for (const [id, n] of Object.entries(S.data.nodes)) {
+    if (id !== String(S.data.root) && (n.n || "").toLowerCase().includes(q)) hitsN.push(id);
+    (n.f || []).forEach((f, i) => { if (((f.nm || "") + " " + (f.c || "")).toLowerCase().includes(q)) hitsF.push({ id, f, i }); });
+    if (hitsN.length + hitsF.length > 400) break;
+  }
+  let h = "";
+  if (hitsN.length) {
+    h += '<div class="sec"><div class="sec-h"><h3>' + T("folders") + '</h3></div><div class="files">';
+    hitsN.slice(0, 40).forEach((id) => { h += '<button class="node" dir="auto" data-go="' + id + '"><b>' + esc(node(id).n) + '</b><small>' + esc(pathNames(id).join(" › ")) + "</small></button>"; });
+    h += "</div></div>";
+  }
+  if (hitsF.length) {
+    h += '<div class="sec"><div class="sec-h"><h3>' + T("files") + '</h3></div><div class="files">';
+    hitsF.slice(0, 60).forEach((x) => { h += fileCard(x.id, x.f, x.i, pathNames(x.id).join(" › ")); });
+    h += "</div></div>";
+  }
+  return { n: hitsN.length + hitsF.length, html: h };
+}
+
+function resultCard(e, title){
+  const f = e.f, on = inCart(e.id, f.k);
+  const orig = f.nm || (f.c ? f.c.split("\n")[0] : "");
+  const sub = [orig ? orig.slice(0, 80) : "", [f.t, fmtSize(f.s)].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
+  return '<button class="file" data-tg="' + esc(e.id) + "|" + esc(f.k) + '" aria-pressed="' + on + '">' +
+    '<span class="chk" aria-hidden="true">✓</span><span class="ficon" aria-hidden="true">' + icon(f.t) + "</span>" +
+    '<span class="fbody" dir="auto"><span class="ftitle">' + esc(title) + "</span>" +
+    '<span class="fsub">' + esc(sub) + "</span></span></button>";
+}
+
+const RESULT_CAP = 300;
+function renderSearch(){
+  const raw = S.query;
+  const q = parseQuery(raw);
+  if (q.empty) return "";
+
+  // Words that mean nothing to the dictionary (or content with no metadata yet): classic text search.
+  if (!q.recognized || !S.sindex.length) {
+    const r = legacySearch(raw);
+    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+  }
+
+  // Structured search: a field the user did not type means ANY value for that field.
+  const matches = S.sindex.filter((e) => matchEntry(e, q));
+  if (!matches.length) {
+    const r = legacySearch(raw);      // metadata-less content stays findable by plain text
+    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+  }
+  const blocks = groupResults(matches, q, S.sctx);
+  let h = '<div class="meta">' + matches.length + " " + T("results") + "</div>";
+  let shown = 0;
+  for (const b of blocks) {
+    if (shown >= RESULT_CAP) break;
+    h += '<div class="sub-h" dir="auto">' + esc(b.name + b.suffix) + "</div>";
+    for (const g of b.groups) {
+      if (shown >= RESULT_CAP) break;
+      if (b.showHeadings) h += '<div class="grp" dir="auto">' + esc(g.heading) + "</div>";
+      h += '<div class="files">';
+      for (const it of g.items) { if (shown >= RESULT_CAP) break; h += resultCard(it.e, it.title); shown++; }
+      h += "</div>";
+    }
+  }
+  if (shown >= RESULT_CAP) h += '<div class="meta" style="margin-top:12px">' + esc(T("capNote", { n: RESULT_CAP })) + "</div>";
+  return h;
+}
+
+function renderCartBar(){
+  const bar = $("cartbar"), c = cartCounts();
+  bar.classList.toggle("show", S.cart.length > 0 && !S.sheet);
+  $("openCart").innerHTML = "<span>🛒 " + T("review") + '</span><span class="pill">' + esc(T("cartLimits", { r:c.records, mr:MAX_RECORD_ITEMS, f:c.files, mf:MAX_FILE_ITEMS })) + "</span>";
+}
+
+function normalizeFolderGrid(){
+  const rowsEl = document.querySelector('.rows');
+  if (!rowsEl) return;
+  const items = Array.from(rowsEl.querySelectorAll(':scope > .node'));
+  // Decide from the elements that were actually rendered, not from source row metadata.
+  // This guarantees 10 rendered folders become 5 complete pairs.
+  for (const el of items) el.style.gridColumn = 'auto';
+  if (items.length % 2 === 1 && items.length) items[items.length - 1].style.gridColumn = '1 / -1';
+}
+
+function renderAll(keepScroll){
+  if (!S.data) return;
+  const y = window.scrollY;
+  renderCrumbs();
+  $("app").innerHTML = S.query.trim() ? renderSearch() : renderNode();
+  normalizeFolderGrid();
+  renderCartBar();
+  if (S.sheet) renderSheet();
+  syncBackButton();
+  if (keepScroll) window.scrollTo(0, y);
+}
+
+/* ───────────── sheet (cart review / result) ───────────── */
+function openSheet(kind, extra){ S.sheet = Object.assign({ kind }, extra || {}); $("scrim").classList.add("show"); $("sheet").classList.add("show"); renderCartBar(); renderSheet(); syncBackButton(); }
+function closeSheet(){ S.sheet = null; $("scrim").classList.remove("show"); $("sheet").classList.remove("show"); renderCartBar(); syncBackButton(); }
+
+function renderSheet(){
+  const el = $("sheet"), sh = S.sheet; if (!sh) return;
+  if (sh.kind === "done") {
+    el.innerHTML = '<div class="done"><div class="big">✅</div><h3>' + esc(T("sentOk", { n: sh.sent })) + "</h3><p class=\"meta\">" + esc(T("sentHint")) + (sh.warn ? "<br>" + esc(sh.warn) : "") +
+      '</p></div><div class="sheet-f"><button class="btn" data-act="keep">' + T("keep") + '</button><button class="btn primary" data-act="closeapp">' + T("close") + "</button></div>";
+    return;
+  }
+  let body = "";
+  if (!S.cart.length) body = '<div class="empty">' + T("cartEmpty") + "</div>";
+  S.cart.forEach((c) => {
+    const x = findFile(c.n, c.k); if (!x) return;
+    body += '<div class="citem"><span class="ficon">' + icon(x.f.t) + '</span><span class="fbody" dir="auto"><span class="ftitle">' + esc(ftitle(x.f, x.i)) + '</span><span class="fsub">' + esc(pathNames(c.n).join(" › ")) + '</span></span><button class="x" data-rm="' + esc(keyOf(c.n, c.k)) + '" aria-label="remove">✕</button></div>';
+  });
+  if (sh.err) body = '<div class="banner err">' + esc(sh.err) + "</div>" + body;
+  const n = S.cart.length;
+  const c = cartCounts();
+  const limits = T("cartLimits", { r:c.records, mr:MAX_RECORD_ITEMS, f:c.files, mf:MAX_FILE_ITEMS });
+  el.innerHTML = '<div class="sheet-h"><h3 id="sheetTitle">🛒 ' + T("cart") + " (" + n + "/" + MAX_TOTAL_ITEMS + ')</h3><button class="link" data-act="close">✕</button></div><div class="sheet-b"><div class="meta">' + esc(limits) + '</div>' + body + "</div>" +
+    '<div class="sheet-f"><button class="btn" data-act="clear"' + (n && !S.sending ? "" : " disabled") + ">" + T("clear") + '</button><button class="btn primary" data-act="send"' + (n && !S.sending ? "" : " disabled") + ">" + (S.sending ? '<span class="spin"></span>' + T("sending") : "📨 " + T("send")) + "</button></div>";
+}
+
+async function send(){
+  if (S.sending || !S.cart.length) return;
+  if (!initData) { S.sheet.err = T("openFromBot"); renderSheet(); return; }
+  S.sending = true; if (S.sheet) S.sheet.err = ""; renderSheet();
+  const items = S.cart.map((c) => ({ n: c.n, k: c.k }));
+  const r = await api("/api/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items }) });
+  S.sending = false;
+  if (r && r.ok) {
+    S.cart = []; persist(); haptic("ok");
+    const warn = [r.failed && r.failed.length ? T("partial", { f: r.failed.length }) : "", r.missing && r.missing.length ? T("gone", { m: r.missing.length }) : ""].filter(Boolean).join(" ");
+    openSheet("done", { sent: r.sent, warn });
+    renderAll(true);
+    return;
+  }
+  if (r && r.error === "none_available" && r.missing) { S.cart = S.cart.filter((c) => !r.missing.some((m) => m.n === c.n && m.k === c.k)); persist(); }
+  haptic("warn");
+  if (S.sheet) { S.sheet.err = errText(r); renderSheet(); }
+  renderAll(true);
+}
+
+
+/* ───────────── direct iframe viewer (no proxy) ───────────── */
+let webviewUrl = "";
+let webviewAttemptUrl = "";
+let webviewFallbackTimer = null;
+
+function clearWebviewTimer(){
+  if (webviewFallbackTimer) { clearTimeout(webviewFallbackTimer); webviewFallbackTimer = null; }
+}
+
+function tryHttpsUpgrade(href){
+  const raw = String(href || "");
+  if (!/^https?:\/\//i.test(raw)) return raw;
+
+  try {
+    const u = new URL(raw);
+    // Zagazig University publishes these two endpoints without `www` over HTTPS.
+    // The old HTTP links commonly circulated with `www`, whose HTTPS host currently
+    // fails to respond correctly. Canonicalize only these known university hosts.
+    const host = u.hostname.toLowerCase();
+    if (host === "www.studentactivities.zu.edu.eg") {
+      u.protocol = "https:";
+      u.hostname = "studentactivities.zu.edu.eg";
+      if (/^\/Students\/Registration\/ed_login\.aspx$/i.test(u.pathname)) {
+        u.pathname = "/Students/Registration/ED_Login.aspx";
+      }
+      return u.toString();
+    }
+    if (host === "www.militaryeducation.zu.edu.eg") {
+      u.protocol = "https:";
+      u.hostname = "militaryeducation.zu.edu.eg";
+      return u.toString();
+    }
+    // Generic HTTP -> HTTPS upgrade for other sites.
+    if (u.protocol === "http:") u.protocol = "https:";
+    return u.toString();
+  } catch (_) {
+    return /^http:\/\//i.test(raw) ? raw.replace(/^http:\/\//i, "https://") : raw;
+  }
+}
+
+
+function isLoginPortalUrl(href){
+  try {
+    const u = new URL(String(href || ""));
+    const host = u.hostname.toLowerCase();
+    return host === "comstudent.eps.zu.edu.eg" || host === "admincom.eps.zu.edu.eg" || host === "militaryeducation.zu.edu.eg" || host === "www.militaryeducation.zu.edu.eg" || host === "studentactivities.zu.edu.eg" || host === "www.studentactivities.zu.edu.eg";
+  } catch (_) { return false; }
+}
+
+function openExternalRobust(href){
+  try {
+    if (/^tg:/i.test(href) && tg && tg.openTelegramLink) { tg.openTelegramLink(href); return; }
+    if (tg && tg.openLink) { tg.openLink(href, { try_instant_view: false }); return; }
+    window.open(href, "_blank", "noopener,noreferrer");
+  } catch (_) {
+    try { window.open(href, "_blank", "noopener,noreferrer"); } catch (_) {}
+  }
+}
+
+function openWebView(href){
+  if (!href) return;
+  // These university portals depend on server-side session/auth cookies.
+  // In a cross-site iframe those cookies can be blocked or partitioned, so
+  // the page may accept the login form but fail to advance to the next page.
+  if (isLoginPortalUrl(href)) {
+    openExternalRobust(href);
+    return;
+  }
+  clearWebviewTimer();
+  webviewUrl = String(href);
+  webviewAttemptUrl = tryHttpsUpgrade(webviewUrl);
+
+  const el=$("webview"), frame=$("webviewFrame"), title=$("webviewTitle"), note=$("webviewNote");
+  title.textContent=webviewUrl;
+  note.textContent = /^http:\/\//i.test(webviewUrl)
+    ? (/(?:^|\.)studentactivities\.zu\.edu\.eg$|(?:^|\.)militaryeducation\.zu\.edu\.eg$/i.test((new URL(webviewAttemptUrl)).hostname)
+        ? "Opening the official HTTPS address inside the Mini App…"
+        : "Trying the HTTPS version inside the Mini App… If it does not load, use Open external.")
+    : "";
+  note.classList.toggle("show", /^http:\/\//i.test(webviewUrl));
+
+  try{ frame.src = webviewAttemptUrl; }catch(_){ }
+  el.classList.add("show");
+  el.setAttribute("aria-hidden","false");
+
+  // HTTP pages can only stay inside an HTTPS Mini App when the destination
+  // also supports HTTPS. Give the secure upgrade a few seconds, then keep
+  // the in-app viewer open and expose the already-visible Open external button.
+  if (/^http:\/\//i.test(webviewUrl)) {
+    webviewFallbackTimer = setTimeout(() => {
+      webviewFallbackTimer = null;
+      note.textContent = "The secure HTTPS version did not respond. Use Open external to open the original HTTP link.";
+      note.classList.add("show");
+    }, 7000);
+  }
+
+  try { if(tg&&tg.BackButton){ tg.BackButton.show(); tg.BackButton.onClick(closeWebView); } } catch(_){}
+}
+
+function closeWebView(){
+  clearWebviewTimer();
+  const el=$("webview"), frame=$("webviewFrame");
+  try{frame.src="about:blank";}catch(_){}
+  el.classList.remove("show");
+  el.setAttribute("aria-hidden","true");
+  webviewUrl="";
+  webviewAttemptUrl="";
+  try{if(tg&&tg.BackButton){tg.BackButton.offClick(closeWebView);syncBackButton();}}catch(_){}
+}
+$("webviewBack").onclick=closeWebView;
+$("webviewExternal").onclick=()=>{
+  if(!webviewUrl)return;
+  try{
+    if(/^tg:/i.test(webviewUrl)&&tg&&tg.openTelegramLink) tg.openTelegramLink(webviewUrl);
+    else if(tg&&tg.openLink) tg.openLink(webviewUrl);
+    else window.open(webviewUrl,"_blank","noopener");
+  }catch(_){}
+};
+$("webviewFrame").addEventListener("load",()=>{ clearWebviewTimer(); $("webviewNote").classList.remove("show"); });
+$("webviewFrame").addEventListener("error",()=>$("webviewNote").classList.add("show"));
+
+/* ───────────── events ───────────── */
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  const ext = t.closest("[data-ext]");
+  if (ext) { e.preventDefault(); const href = ext.getAttribute("href") || ""; if (/^https?:/i.test(href)) openWebView(href); else { openExternalRobust(href); } return; }
+  const go = t.closest("[data-go]"); if (go && !go.disabled) { open(go.dataset.go, true); haptic(); return; }
+  const tgl = t.closest("[data-tg]"); if (tgl) { const [n, k] = tgl.dataset.tg.split("|"); toggle(n, k); return; }
+  const rm = t.closest("[data-rm]"); if (rm) { const [n, k] = rm.dataset.rm.split("|"); S.cart = S.cart.filter((c) => !(c.n === n && c.k === k)); persist(); renderAll(true); return; }
+  const cp = t.closest("[data-copy]"); if (cp) { const nd = node(S.cur); const txt = nd && nd.o && nd.o[Number(cp.dataset.copy)]; if (txt) { (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast(T("copied"))).catch(() => {}); } return; }
+  const act = t.closest("[data-act]");
+  if (act) {
+    const a = act.dataset.act;
+    if (a === "all") selectAllHere();
+    else if (a === "close" || a === "keep") closeSheet();
+    else if (a === "clear") { S.cart = []; persist(); renderAll(true); closeSheet(); }
+    else if (a === "send") send();
+    else if (a === "closeapp") { try { tg ? tg.close() : closeSheet(); } catch(_) { closeSheet(); } }
+  }
+});
+$("openCart").onclick = () => openSheet("cart");
+$("scrim").onclick = () => closeSheet();
+// Real-time: every change filters the already-loaded data. One render per animation frame (no network).
+let qRaf = 0;
+$("q").addEventListener("input", (e) => {
+  S.query = e.target.value;
+  cancelAnimationFrame(qRaf);
+  qRaf = requestAnimationFrame(() => renderAll());
+});
+window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
+
+/* ───────────── boot ───────────── */
+try { if (tg) { tg.ready(); tg.expand(); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } } catch(_) {}
+applyTheme();
+loadContent();
+})();
+</script>
+</body>
+</html>
