@@ -157,8 +157,8 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchEntry, buildContext, groupResults, normalizeText
-} from "./search-core.js?v=1";
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta
+} from "./search-core.js?v=2";
 
 (() => {
 "use strict";
@@ -264,14 +264,17 @@ function buildSearchIndex(){
   const entries = [];
   for (const [id, n] of Object.entries(S.data.nodes)) {
     (n.f || []).forEach((f, i) => {
-      const sm = f.sm;
-      if (!sm || (!sm.s && !sm.t && sm.n == null)) return;
-      entries.push({
-        id, i, f,
-        s: sm.s || null, t: sm.t || null,
-        n: sm.n == null ? null : (Array.isArray(sm.n) ? sm.n : [sm.n]),
+      const sm = normalizeSearchMeta(f.sm);
+      // Subject is optional: schedule and other cross-subject content can still be indexed.
+      if (!sm || !Object.keys(sm).length) return;
+      const entry = {
+        id, i, f, meta: sm,
         hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || ""))
-      });
+      };
+      // Keep the old shortcut properties for compatibility with existing display/test code;
+      // the matcher reads every registered key from `meta`.
+      for (const [key, value] of Object.entries(sm)) entry[key] = key === "n" && value != null ? (Array.isArray(value) ? value : [value]) : value;
+      entries.push(entry);
     });
   }
   S.sindex = entries;
@@ -812,7 +815,7 @@ $("q").addEventListener("input", (e) => {
 });
 window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
 
-/* ───────────── boot ──────────── */
+/* ───────────── boot ───────────── */
 try { if (tg) { tg.ready(); tg.expand(); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } } catch(_) {}
 applyTheme();
 loadContent();
