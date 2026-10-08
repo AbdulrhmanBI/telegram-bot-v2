@@ -5,7 +5,7 @@
 //   - ADMIN content viewing/editing uses the published KV snapshot plus a per-admin D1 draft/session.
 //   - Authoritative content-table writes occur on explicit admin Save/Force Save (and recovery/admin operations).
 //   - Block status: RAM (2 min) -> Cache API -> D1 primary-key read on a miss (bans are authoritative; a D1 error is never cached).
-// ============================================================================
+// ===========================================================================
 // Cloudflare Worker (Modules) — Production Content Engine
 // Authoritative Store: Cloudflare D1 (SQL)
 // Fast Edge Cache: Cloudflare KV (DB: key "db")
@@ -13,7 +13,7 @@
 //           Strict Admin Auth, Self-Healing Sync, Disaster Recovery /restore,
 //           Full Telegram Media Browser, Built-in Calculator.
 //           ADMIN CONTENT FLOW: published cache -> per-admin D1 draft/session -> D1 Save -> published cache sync.
-// ============================================================================
+// ===========================================================================
 // Bindings (wrangler.toml):
 //   KV Namespaces:
 //     DB                 // Global Content Cache (keys: "db", "db:backup:last")
