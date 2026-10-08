@@ -2,9 +2,9 @@
 # wrangler.toml — Telegram content bot + Mini App
 # ===========================================================================
 
-name = "fcescredit27"
+name = "27"
 main = "src/worker.js"
-compatibility_date = "2026-09-22"
+compatibility_date = "2026-09-24"
 
 # Mini App static files
 [assets]
@@ -14,12 +14,12 @@ directory = "./public"
 [[d1_databases]]
 binding = "SQL"
 database_name = "content"
-database_id = "74128e8d-d1a7-4ef5-96dd-a67586c1b8af"
+database_id = "5c81d2b2-7929-4ec3-9982-0200b8b401b9"
 
 # KV — existing production namespace
 [[kv_namespaces]]
 binding = "DB"
-id = "bbbeaf6767904cf78050f23501359b13"
+id = "c0dc47b6c90b489fb178d028d3441ad9"
 
 # Cron: broadcast every 20 minutes; content self-healing runs only at :00 UTC
 [triggers]
