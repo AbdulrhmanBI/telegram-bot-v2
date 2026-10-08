@@ -1,0 +1,47 @@
+# ===========================================================================
+# wrangler.toml — Telegram content bot + Mini App
+# ===========================================================================
+
+name = "fcescredit27"
+main = "src/worker.js"
+compatibility_date = "2026-09-22"
+
+# Mini App static files
+[assets]
+directory = "./public"
+
+# D1 — existing production database
+[[d1_databases]]
+binding = "SQL"
+database_name = "content"
+database_id = "74128e8d-d1a7-4ef5-96dd-a67586c1b8af"
+
+# KV — existing production namespace
+[[kv_namespaces]]
+binding = "DB"
+id = "bbbeaf6767904cf78050f23501359b13"
+
+# Cron: broadcast every 20 minutes; content self-healing runs only at :00 UTC
+[triggers]
+crons = ["*/20 * * * *"]
+
+# Existing non-secret variables
+[vars]
+ADMIN_IDS = "6453532232,8571353627,7943732217"
+SCHEMA_MANAGED = "1"
+MON_ADMIN_ID = "8571353627"
+MON_ENABLED = "1"
+REQUIRED_CHAT_ID = "4484841766"
+
+# Optional — auto-detected if omitted
+# MINIAPP_URL = "https://YOUR-WORKER-DOMAIN.workers.dev/app/"
+
+[observability]
+enabled = true
+head_sampling_rate = 0.05
+
+# Secrets are NOT placed in this file:
+# BOT_TOKEN
+# WEBHOOK_SECRET
+# MEMBERSHIP_BOT_TOKEN
+# FILE_PROXY_TOKEN
