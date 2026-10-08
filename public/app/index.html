@@ -812,7 +812,7 @@ $("q").addEventListener("input", (e) => {
 });
 window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
 
-/* ───────────── boot ───────────── */
+/* ───────────── boot ──────────── */
 try { if (tg) { tg.ready(); tg.expand(); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } } catch(_) {}
 applyTheme();
 loadContent();
