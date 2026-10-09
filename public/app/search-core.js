@@ -203,6 +203,65 @@ export function normalizeSearchMeta(meta, dict = SEARCH_DICTIONARY) {
   return Object.keys(out).length ? out : null;
 }
 
+// A metadata object's insertion order is the admin-defined field path, left to right.
+// A candidate value for `fieldKey` is eligible only when every ancestor in THIS path
+// has been selected and matches. Selected descendants are deliberately ignored while
+// calculating a parent's options (otherwise child selection circularly narrows the parent).
+// Selected fields that are neither ancestors nor descendants in this candidate path must
+// still match the candidate, so independent active filters continue to combine as AND.
+// This is generic: no field key has a built-in parent/child role.
+export function fieldPathAllowsOption(meta, fieldKey, selected = {}) {
+  const clean = normalizeSearchMeta(meta);
+  if (!clean) return false;
+  const keys = Object.keys(clean);
+  const index = keys.indexOf(String(fieldKey));
+  if (index < 0) return false;
+  const ancestors = keys.slice(0, index);
+  const descendants = new Set(keys.slice(index + 1));
+
+  for (const parentKey of ancestors) {
+    const wanted = selected[parentKey];
+    if (wanted == null || wanted === "") return false;
+    const raw = clean[parentKey];
+    const vals = (Array.isArray(raw) ? raw : [raw]).map(String);
+    if (!vals.includes(String(wanted))) return false;
+  }
+
+  for (const [selectedKey, wanted] of Object.entries(selected || {})) {
+    if (wanted == null || wanted === "" || selectedKey === String(fieldKey)) continue;
+    // Descendant filters don't narrow their parent dropdown's choices.
+    if (descendants.has(selectedKey)) continue;
+    const at = keys.indexOf(selectedKey);
+    // A currently selected field from another path/branch must be present and match,
+    // unless it is a descendant of the field whose options are being calculated.
+    if (at < 0) return false;
+    const raw = clean[selectedKey];
+    const vals = (Array.isArray(raw) ? raw : [raw]).map(String);
+    if (!vals.includes(String(wanted))) return false;
+  }
+  return true;
+}
+
+
+// The single source of truth for dropdown choices. Keeping this calculation in the
+// core makes the dependency rule directly testable and prevents UI code from applying
+// a second, non-directional filter that would let children narrow their parents.
+export function fieldOptionValues(entries, fieldKey, selected = {}) {
+  const distinct = new Set();
+  for (const entry of entries || []) {
+    const meta = entry?.meta || entry?.search_meta || entry;
+    if (!fieldPathAllowsOption(meta, fieldKey, selected)) continue;
+    const value = meta?.[fieldKey];
+    if (value == null) continue;
+    for (const item of Array.isArray(value) ? value : [value]) distinct.add(String(item));
+  }
+  return [...distinct].sort((a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (a.trim() !== "" && b.trim() !== "" && Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+}
+
 export function subjectName(code, dict = SEARCH_DICTIONARY) { return dict.subjects?.[code]?.name || dict.subjects?.[String(code || "").toUpperCase()]?.name || String(code || ""); }
 export function typeLabel(code, plural = false, dict = SEARCH_DICTIONARY) {
   const item = dict.types?.[code] || dict.types?.[String(code || "").toUpperCase()];
