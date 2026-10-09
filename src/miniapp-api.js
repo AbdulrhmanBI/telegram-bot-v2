@@ -24,7 +24,7 @@ const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;     // reopen the app from the bot af
 const SEND_COOLDOWN_MS = 5000;                 // min gap between two sends of the same user (per isolate)
 const SEND_HOURLY_CAP = 40;                    // max sends / user / hour (per isolate)
 const GAP_BETWEEN_TG_CALLS_MS = 350;           // wall-clock pause only (no CPU), keeps Telegram flood limits happy
-const SLIM_BUILD_REV = 4;                      // rev 4: `sm` is generic (any fields), no longer limited to s/t/n
+const SLIM_BUILD_REV = 4;                      // rev 3: adds `sm` (structured search metadata) per file; rev 4: `sm` carries ANY field (field-agnostic search)
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const enc = new TextEncoder();
@@ -144,9 +144,10 @@ function buildSlim(db) {
       if (f.caption) item.c = String(f.caption).slice(0, 300);
       if (f.file_name) item.nm = String(f.file_name).slice(0, 200);
       if (f.file_size) item.s = Number(f.file_size) || undefined;
-      // Structured search metadata: ANY fields ({s,t,n,l,sem,v,doctor,...}), kept generically.
-      // Optional: legacy files simply have none. Only the normalized machine data is shipped
-      // (the admin's raw search_name stays server-side) and Telegram file_ids are never exposed.
+      // Structured search metadata: a flat object with ANY fields ({s,t,n,l,sem,v,doctor,...}); the
+      // shared core normalizes it without knowing the field names. Optional: legacy files have none.
+      // Only the normalized machine data is shipped (the admin's raw search_name stays server-side),
+      // and Telegram file_ids are still never exposed.
       const sm = normalizeSearchMeta(f.search_meta);
       if (sm) item.sm = sm;
       slimFiles.push(item);

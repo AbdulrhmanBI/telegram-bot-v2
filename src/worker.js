@@ -35,7 +35,8 @@
 
 import { handleMiniApi } from "./miniapp-api.js";
 import {
-  parseAdminSearchInput, normalizeSearchMeta, serializeSearchMeta, describeMeta, shortMeta, codesHelpText
+  SEARCH_DICTIONARY, parseAdminSearchInput, normalizeSearchMeta, describeMeta, codesHelpText,
+  serializeSearchMeta, parseSearchMeta, shortMeta, completeMetaFromPath
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -3582,13 +3583,12 @@ async function __ensureSearchColumns(env) {
 }
 
 // Canonical JSON text for a meta object (stable key order => no phantom diffs).
-// Field-agnostic: every field survives; the registry only decides the ORDER and how values normalize.
+// Field-agnostic: ANY field survives (the shared core decides the order and the normalization).
 function __searchMetaJson(meta) {
   return serializeSearchMeta(meta);
 }
 function __searchMetaParse(text) {
-  if (text == null || text === "") return null;
-  try { return normalizeSearchMeta(typeof text === "string" ? JSON.parse(text) : text); } catch (_) { return null; }
+  return parseSearchMeta(text);
 }
 // Only present when set => legacy files stay byte-identical (no spurious "changed" signatures/hashes).
 function __searchFieldsOf(f) {
@@ -6056,7 +6056,7 @@ async function handleAdminCallback(env, q, bag) {
     }
     if (op === "SQ_HELP") {
       await tgSend(env, chat_id,
-        "🔎 Search name help\n\nFormat — any parts, any order, any field:\n[value].field  e.g.  " + __SEARCH_SYNTAX_HINT + "  or  [SCHEDULE].t [3].l [1].sem\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”.\nA field that is not in the list below is still stored as custom text.\n\n" + codesHelpText(),
+        "🔎 Search name help\n\nFormat [value].field (any parts, any order):\n" + __SEARCH_SYNTAX_HINT + "\n\n[MA].s = subject   [Lec].t = type   [2].n = number   [3].l = level   [1].sem = semester   [Final].v = variant\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”. Level / Semester are taken from the folders when you leave them out.\n\n" + codesHelpText(SEARCH_DICTIONARY),
         { noScope: true });
       return true;
     }
@@ -6998,8 +6998,9 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
             const r = parseAdminSearchInput(raw);
             if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __searchPromptKb(), noScope: true }); return true; }
             const qf = fileId ? (node.files || []).find(x => String(x.id) === String(fileId)) : null;
-            if (qf) { __setFileSearch(qf, r.name, r.meta); __bumpDraftRev(db); setNow = true; }
-            prefix = "✅ " + describeMeta(r.meta) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "");
+            const fullMeta = completeMetaFromPath(r.meta, __nodePathNames(db, node.id));
+            if (qf) { __setFileSearch(qf, r.name, fullMeta); __bumpDraftRev(db); setNow = true; }
+            prefix = "✅ " + describeMeta(fullMeta, SEARCH_DICTIONARY) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "");
           }
           const doneN = doneBefore + (setNow ? 1 : 0);
           const nextPos = pos + 1;
@@ -7029,9 +7030,10 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
         }
         const r = parseAdminSearchInput(raw);
         if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __pendingKb(false), noScope: true }); return true; }
-        __setFileSearch(f, r.name, r.meta); __bumpDraftRev(db);
+        const fullMeta = completeMetaFromPath(r.meta, __nodePathNames(db, node.id));
+        __setFileSearch(f, r.name, fullMeta); __bumpDraftRev(db);
         await persist(clearedState());
-        await tgSend(env, chat_id, "✅ Search name set in draft: " + describeMeta(r.meta) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "") + "\nClick Save to apply.");
+        await tgSend(env, chat_id, "✅ Search name set in draft: " + describeMeta(fullMeta, SEARCH_DICTIONARY) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "") + "\nClick Save to apply.");
         await showManageList(env, chat_id, db);
         return true;
       }
@@ -9080,9 +9082,11 @@ const __SEARCH_SYNTAX_HINT = "[MA].s [Lec].t [2].n";
 
 // Set (or clear when name/meta are empty) the search identity of ONE file placement in the draft.
 // It is per placement on purpose: the same Telegram file may sit in several folders with different identities.
-function __setFileSearch(f, name, meta) {
+// `pathNames` (optional, folder names root -> leaf) completes the meta with what the tree already says
+// (Level / Semester / schedule variant ...). Values typed by the admin always win.
+function __setFileSearch(f, name, meta, pathNames) {
   if (!f) return false;
-  const m = normalizeSearchMeta(meta);
+  const m = pathNames && meta ? completeMetaFromPath(meta, pathNames) : normalizeSearchMeta(meta);
   if (name && m) { f.search_name = String(name).slice(0, 120); f.search_meta = m; }
   else { delete f.search_name; delete f.search_meta; }
   return true;
@@ -9090,6 +9094,13 @@ function __setFileSearch(f, name, meta) {
 
 function __searchShort(meta) {
   return shortMeta(meta);
+}
+
+// Folder names root -> leaf of a node in the draft (used to derive Level / Semester / variant).
+function __nodePathNames(db, nodeId) {
+  try {
+    return buildPathToNode(db, nodeId).map((id) => String((db.nodes[String(id)] || {}).name || ""));
+  } catch (_) { return []; }
 }
 
 function __searchFileLabel(f) {
