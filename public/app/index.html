@@ -41,19 +41,26 @@ button{cursor:pointer}
 .search{flex:1;min-width:0;min-height:36px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none;font-size:13px;color-scheme:inherit}
 .search::placeholder{color:var(--muted);opacity:1}
 .search:focus{border-color:var(--accent)}
-.filter-host{display:flex;flex-direction:column;align-items:flex-start;min-width:0;margin-top:3px}
-.filter-toggle{display:inline-flex;align-items:center;gap:6px;min-height:28px;margin:0;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:12px;font-weight:650}
-.filter-toggle.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
-.filter-toggle svg{width:14px;height:14px;flex:none}
-.filter-toggle .filter-count{font-size:10px;color:var(--muted);font-weight:600}
-.filter-panel{width:100%;padding:5px 0 0;border-top:0}
-.filter-heading{display:flex;align-items:center;justify-content:space-between;margin:0 1px 4px;font-size:10.5px;color:var(--muted);font-weight:650}
-.filter-clear{border:0;background:none;color:var(--accent);font-size:11px;padding:2px 5px}
-.filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;align-items:start}
+.filter-host{display:flex;flex-direction:column;align-items:flex-start;min-width:0;margin-top:4px;gap:0}
+.filter-toggle{appearance:none;display:inline-flex;align-items:center;gap:7px;min-height:30px;margin:0;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--muted);font-size:12px;font-weight:650;box-shadow:0 1px 2px rgba(16,24,40,.04);transition:background .14s ease,border-color .14s ease,color .14s ease}
+.filter-toggle:hover{border-color:color-mix(in srgb,var(--accent) 32%,var(--line));color:var(--text)}
+.filter-toggle.expanded{background:var(--card);border-color:var(--line);color:var(--text)}
+.filter-toggle.has-filters{border-color:color-mix(in srgb,var(--accent) 48%,var(--line));background:var(--accent-soft);color:var(--accent)}
+.filter-toggle svg{width:13px;height:13px;flex:none;opacity:.8}
+.filter-toggle .filter-count{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--accent);color:var(--accent-text);font-size:10px;font-weight:700}
+.filter-toggle .filter-caret{display:inline-block;font-size:10px;opacity:.7;transition:transform .14s ease}
+.filter-toggle.expanded .filter-caret{transform:rotate(180deg)}
+.filter-panel{width:100%;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--card) 82%,var(--bg));box-shadow:0 2px 9px rgba(16,24,40,.05)}
+.filter-panel:not(.filter-hidden){animation:filterPanelIn .14s ease-out}
+@keyframes filterPanelIn{from{opacity:.7;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+.filter-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 1px 7px;font-size:10.5px;color:var(--muted);font-weight:650}
+.filter-clear{border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 7px}
+.filter-clear:active{background:var(--accent-soft);color:var(--accent)}
+.filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:start}
 .filter-cell{position:relative;min-width:0}
 /* Custom dropdowns are used instead of native <select> so mobile Telegram/WebView
    shows an Excel-like list directly below the field rather than a full-screen picker. */
-.filter-select{appearance:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0;min-height:30px;border:1px solid var(--line);border-radius:8px;padding:6px 7px;font-size:11px;line-height:1.25;text-align:start;outline:none;background:var(--card);color:var(--text);cursor:pointer}
+.filter-select{appearance:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0;min-height:31px;border:1px solid var(--line);border-radius:8px;padding:6px 7px;font-size:11px;line-height:1.25;text-align:start;outline:none;background:var(--card);color:var(--text);cursor:pointer;transition:border-color .12s ease,background .12s ease}
 .filter-select .filter-current{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .filter-select .filter-chevron{width:12px;height:12px;flex:none;opacity:.75;transition:transform .12s ease}
 .filter-select[aria-expanded="true"] .filter-chevron{transform:rotate(180deg)}
@@ -74,6 +81,7 @@ button{cursor:pointer}
 .sep{opacity:.5}
 
 main{padding:12px;max-width:900px;margin:0 auto}
+.root-meta{margin-top:0;margin-bottom:10px}
 h2{margin:6px 0 2px;font-size:20px}
 .meta{color:var(--muted);font-size:12.5px;margin-bottom:12px}
 .sec{margin-top:18px}
@@ -534,7 +542,7 @@ function filterControls(){
   if (!S.filterFields.length || S.page !== "library") return "";
   const activeCount = Object.values(S.filters).filter(v => v !== "" && v != null).length;
   const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>';
-  return '<button type="button" class="filter-toggle' + (S.filtersOpen || activeCount ? ' active' : '') + '" data-toggle-filters="1" aria-expanded="' + (S.filtersOpen ? 'true' : 'false') + '">' + icon + '<span>Filter</span>' + (activeCount ? ' <span class="filter-count">' + activeCount + '</span>' : '') + '<span aria-hidden="true">' + (S.filtersOpen ? '⌃' : '⌄') + '</span></button>' +
+  return '<button type="button" class="filter-toggle' + (S.filtersOpen ? ' expanded' : '') + (activeCount ? ' has-filters' : '') + '" data-toggle-filters="1" aria-expanded="' + (S.filtersOpen ? 'true' : 'false') + '">' + icon + '<span>Filter</span>' + (activeCount ? ' <span class="filter-count">' + activeCount + '</span>' : '') + '<span class="filter-caret" aria-hidden="true">⌄</span></button>' +
     '<div id="filterPanel" class="filter-panel' + (S.filtersOpen ? '' : ' filter-hidden') + '" aria-label="Filters"></div>';
 }
 
@@ -544,8 +552,12 @@ function renderNode(){
   const childCount = rows.reduce((a, r) => a + r.length, 0);
   let h = "";
   if (S.banner) { h += '<div class="banner' + (S.banner.err ? " err" : "") + '">' + esc(S.banner.t) + "</div>"; S.banner = null; }
-  h += '<h2 dir="auto">' + esc(S.cur === String(S.data.root) ? T("title") : nd.n) + "</h2>";
-  h += '<div class="meta">' + [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ") + "</div>";
+  // The active page name is already shown in the top page navigation; avoid repeating
+  // "Library" inside the root content. Folder titles remain visible when browsing deeper.
+  const isRoot = S.cur === String(S.data.root);
+  if (!isRoot) h += '<h2 dir="auto">' + esc(nd.n) + "</h2>";
+  const countMeta = [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ");
+  if (countMeta) h += '<div class="meta' + (isRoot ? ' root-meta' : '') + '">' + countMeta + "</div>";
   if (rows.length) {
     // Flatten all child rows for Mini App display only, preserving exact order.
     // This prevents a source row with one item from creating a visual gap.
