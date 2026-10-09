@@ -32,6 +32,14 @@ button{cursor:pointer}
 .bar{display:flex;gap:8px;align-items:center}
 .search{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none}
 .search:focus{border-color:var(--accent)}
+.filter-panel{padding:8px 0 2px;border-top:1px solid transparent}
+.filter-heading{display:flex;align-items:center;justify-content:space-between;margin:2px 1px 6px;font-size:12px;color:var(--muted);font-weight:650}
+.filter-clear{border:0;background:none;color:var(--accent);font-size:12px;padding:3px 5px}
+.filter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.filter-select{width:100%;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 26px 9px 9px;font-size:12px;outline:none;text-overflow:ellipsis}
+.filter-select:focus{border-color:var(--accent)}
+.filter-select.active{border-color:var(--accent);background:var(--accent-soft)}
+.filter-hidden{display:none!important}
 .iconbtn{flex:none;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-size:16px}
 .crumbs{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:13px;color:var(--muted)}
 .crumb{background:none;border:0;padding:2px 4px;color:var(--accent);border-radius:6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -132,6 +140,7 @@ h2{margin:6px 0 2px;font-size:20px}
     <input id="q" class="search" type="search" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="search">
     <button id="themeBtn" class="iconbtn" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
+  <div id="filterPanel" class="filter-panel filter-hidden" aria-label="Content filters"></div>
   <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
 </header>
 
@@ -157,8 +166,8 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta
-} from "./search-core.js?v=3";
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta, SEARCH_FIELDS, SEARCH_DICTIONARY
+} from "./search-core.js?v=4";
 
 (() => {
 "use strict";
@@ -209,7 +218,8 @@ const S = {
   data: null, version: "", max: MAX_TOTAL_ITEMS, parent: {},
   cart: LS.get("lib:cart", []),
   cur: null, trail: [], query: "", sending: false, sheet: null, banner: null,
-  sindex: [], sctx: null          // local structured-search index (built once per content load)
+  sindex: [], sctx: null,         // local structured-search index (built once per content load)
+  filters: {}, filterFields: []
 };
 const T = (k, p) => {
   let s = I18N.en[k] || k;
@@ -258,27 +268,47 @@ function indexParents(){
   for (const [id, n] of Object.entries(S.data.nodes)) for (const row of n.r || []) for (const c of row) if (!(c in S.parent)) S.parent[c] = id;
   buildSearchIndex();
 }
-// Structured search index: only files that carry metadata (`sm`) take part. Built once per content
-// load/update; typing never touches the network, KV or D1.
+// Structured search index: saved metadata plus local hierarchy-derived filters for older files.
+// Built once per content load/update; typing and filter changes never touch the network, KV or D1.
+function locationMetaForNode(id){
+  // Level and semester are structural facts already represented by the folder tree.
+  // Derive them locally for filters; never write these synthetic values back to D1/KV.
+  const out = {};
+  for (const ancestorId of chain(id)) {
+    const name = String(node(ancestorId)?.n || "").trim();
+    let m = name.match(/^level\s+(\d+)$/i);
+    if (m && out.l == null) out.l = Number(m[1]);
+    m = name.match(/^semester\s+(\d+)$/i);
+    if (m && out.sem == null) out.sem = Number(m[1]);
+  }
+  return out;
+}
 function buildSearchIndex(){
-  const entries = [];
+  const entries = [], fieldOrder = [];
   for (const [id, n] of Object.entries(S.data.nodes)) {
     (n.f || []).forEach((f, i) => {
-      const sm = normalizeSearchMeta(f.sm);
-      // Subject is optional: schedule and other cross-subject content can still be indexed.
-      if (!sm || !Object.keys(sm).length) return;
+      const stored = normalizeSearchMeta(f.sm) || {};
+      // Hierarchy fields make Level/Semester filters useful even for old placements
+      // whose saved search metadata predates these fields. Explicit tags take precedence.
+      const sm = Object.assign(locationMetaForNode(id), stored);
+      if (!Object.keys(sm).length) return;
       const entry = {
         id, i, f, meta: sm,
-        hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || ""))
+        hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "") + " " + pathNames(id).join(" "))
       };
-      // Keep the old shortcut properties for compatibility with existing display/test code;
-      // the matcher reads every registered key from `meta`.
-      for (const [key, value] of Object.entries(sm)) entry[key] = value;
+      for (const [key, value] of Object.entries(sm)) {
+        entry[key] = value;
+        if (!fieldOrder.includes(key)) fieldOrder.push(key);
+      }
       entries.push(entry);
     });
   }
   S.sindex = entries;
   S.sctx = buildContext(entries);
+  S.filterFields = fieldOrder;
+  // Preserve only selections that still exist after content refresh.
+  const known = new Set(fieldOrder);
+  for (const key of Object.keys(S.filters)) if (!known.has(key)) delete S.filters[key];
 }
 function chain(id){
   const out = []; let cur = String(id), g = 0, root = String(S.data.root);
@@ -384,6 +414,7 @@ function open(id, push = true){
 }
 function back(){
   if (S.query) { S.query = ""; $("q").value = ""; renderAll(); return true; }
+  if (hasActiveFilters()) { clearFilters(); return true; }
   if (S.sheet) { closeSheet(); return true; }
   if (S.trail.length) { open(S.trail.pop(), false); return true; }
   const p = S.parent[S.cur]; if (p) { open(p, false); return true; }
@@ -392,7 +423,7 @@ function back(){
 function syncBackButton(){
   if (webviewUrl) { try { tg && tg.BackButton && tg.BackButton.show(); } catch(_) {} return; }
   if (!tg || !tg.BackButton) return;
-  const can = !!(S.query || S.sheet || S.trail.length || (S.cur && S.cur !== String(S.data && S.data.root)));
+  const can = !!(S.query || hasActiveFilters() || S.sheet || S.trail.length || (S.cur && S.cur !== String(S.data && S.data.root)));
   try { can ? tg.BackButton.show() : tg.BackButton.hide(); } catch(_) {}
 }
 if (tg && tg.BackButton) tg.BackButton.onClick(() => back());
@@ -520,6 +551,63 @@ function renderNode(){
   return h;
 }
 
+function hasActiveFilters(){ return Object.values(S.filters).some(v => v !== "" && v != null); }
+function filterLabel(key){ return SEARCH_FIELDS[key]?.label || String(key).toUpperCase(); }
+function filterValueLabel(key, value){
+  const def = SEARCH_FIELDS[key];
+  if (def?.role === "level") return "Level " + value;
+  if (def?.role === "semester") return "Semester " + value;
+  if (def?.dictionary) {
+    const d = SEARCH_DICTIONARY[def.dictionary] || {};
+    const item = d[String(value)] || d[String(value).toUpperCase()];
+    if (item) return item.label || item.name || String(value);
+  }
+  return String(value);
+}
+function fieldValues(entry, key){
+  const value = entry.meta?.[key];
+  return value == null ? [] : (Array.isArray(value) ? value : [value]).map(v => String(v));
+}
+function entryMatchesSelectedFilters(entry, exceptKey = null){
+  for (const key of S.filterFields){
+    if (key === exceptKey) continue;
+    const wanted = S.filters[key];
+    if (wanted == null || wanted === "") continue;
+    if (!fieldValues(entry, key).some(v => v === String(wanted))) return false;
+  }
+  return true;
+}
+function renderFilters(){
+  const panel = $("filterPanel");
+  if (!panel) return;
+  if (!S.sindex.length || !S.filterFields.length){ panel.innerHTML = ""; panel.classList.add("filter-hidden"); return; }
+  panel.classList.remove("filter-hidden");
+  const activeCount = Object.values(S.filters).filter(v => v !== "" && v != null).length;
+  let h = '<div class="filter-heading"><span>Filter materials' + (activeCount ? ' · ' + activeCount + ' active' : '') + '</span>' +
+    (activeCount ? '<button type="button" class="filter-clear" data-clear-filters="1">Clear</button>' : '') + '</div><div class="filter-grid">';
+  S.filterFields.forEach((key, index) => {
+    // Cascading: each dropdown is populated from the subset produced by selections to its left.
+    const priorKeys = S.filterFields.slice(0, index);
+    const subset = S.sindex.filter(e => priorKeys.every(k => !S.filters[k] || fieldValues(e, k).includes(String(S.filters[k]))));
+    const distinct = new Set();
+    for (const entry of subset) for (const value of fieldValues(entry, key)) distinct.add(value);
+    const values = [...distinct].sort((a,b) => {
+      const na = Number(a), nb = Number(b);
+      if (a.trim() !== "" && b.trim() !== "" && Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return filterValueLabel(key,a).localeCompare(filterValueLabel(key,b));
+    });
+    const selected = S.filters[key] || "";
+    h += '<label class="sr" for="filter-' + esc(key) + '">Filter by ' + esc(filterLabel(key)) + '</label>' +
+      '<select id="filter-' + esc(key) + '" class="filter-select' + (selected ? ' active' : '') + '" data-filter="' + esc(key) + '" aria-label="Filter by ' + esc(filterLabel(key)) + '">' +
+      '<option value="">All ' + esc(filterLabel(key)) + '</option>';
+    for (const value of values) h += '<option value="' + esc(value) + '"' + (selected === value ? ' selected' : '') + '>' + esc(filterValueLabel(key, value)) + '</option>';
+    h += '</select>';
+  });
+  h += '</div>';
+  panel.innerHTML = h;
+}
+function clearFilters(){ S.filters = {}; renderAll(); }
+
 // Old plain-text search (folder names + file names/captions). Still used for words that are not
 // part of the dictionary, and as a fallback while content has no search metadata yet.
 function legacySearch(raw){
@@ -558,19 +646,30 @@ const RESULT_CAP = 300;
 function renderSearch(){
   const raw = S.query;
   const q = parseQuery(raw);
-  if (q.empty) return "";
+  const filtering = hasActiveFilters();
+  if (q.empty && !filtering) return "";
 
-  // Words that mean nothing to the dictionary (or content with no metadata yet): classic text search.
-  if (!q.recognized || !S.sindex.length) {
+  // Retain the legacy folder/file-name search when no structured filters are active.
+  // With filters active, apply the free-text term locally to the same indexed subset.
+  if (!q.empty && (!q.recognized || !S.sindex.length) && !filtering) {
     const r = legacySearch(raw);
     return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
   }
 
-  // Structured search: a field the user did not type means ANY value for that field.
-  const matches = S.sindex.filter((e) => matchEntry(e, q));
+  const normalizedTerm = normalizeText(raw);
+  const matches = S.sindex.filter((e) => {
+    if (!entryMatchesSelectedFilters(e)) return false;
+    if (q.empty) return true;
+    if (q.recognized) return matchEntry(e, q);
+    return normalizedTerm ? normalizedTerm.split(" ").filter(Boolean).every(word => e.hay.includes(word)) : true;
+  });
   if (!matches.length) {
-    const r = legacySearch(raw);      // metadata-less content stays findable by plain text
-    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+    // Never fall back to an unfiltered result list when the user has selected filters.
+    if (!filtering && !q.empty) {
+      const r = legacySearch(raw);      // metadata-less content stays findable by plain text
+      if (r.n) return '<div class="meta">' + r.n + " " + T("results") + "</div>" + r.html;
+    }
+    return '<div class="meta">0 ' + T("results") + '</div><div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>";
   }
   const blocks = groupResults(matches, q, S.sctx);
   let h = '<div class="meta">' + matches.length + " " + T("results") + "</div>";
@@ -610,7 +709,8 @@ function renderAll(keepScroll){
   if (!S.data) return;
   const y = window.scrollY;
   renderCrumbs();
-  $("app").innerHTML = S.query.trim() ? renderSearch() : renderNode();
+  renderFilters();
+  $("app").innerHTML = (S.query.trim() || hasActiveFilters()) ? renderSearch() : renderNode();
   normalizeFolderGrid();
   renderCartBar();
   if (S.sheet) renderSheet();
@@ -812,6 +912,19 @@ $("q").addEventListener("input", (e) => {
   S.query = e.target.value;
   cancelAnimationFrame(qRaf);
   qRaf = requestAnimationFrame(() => renderAll());
+});
+$("filterPanel").addEventListener("change", (e) => {
+  const select = e.target.closest("select[data-filter]");
+  if (!select) return;
+  const key = select.dataset.filter;
+  const index = S.filterFields.indexOf(key);
+  S.filters[key] = select.value;
+  // Changing an earlier dimension resets dependent selections to avoid stale/invalid combinations.
+  for (const later of S.filterFields.slice(index + 1)) delete S.filters[later];
+  renderAll();
+});
+$("filterPanel").addEventListener("click", (e) => {
+  if (e.target.closest("[data-clear-filters]")) clearFilters();
 });
 window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
 
