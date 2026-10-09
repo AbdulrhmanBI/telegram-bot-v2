@@ -166,8 +166,8 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta, SEARCH_FIELDS, SEARCH_DICTIONARY
-} from "./search-core.js?v=4";
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta
+} from "./search-core.js?v=5";
 
 (() => {
 "use strict";
@@ -268,35 +268,21 @@ function indexParents(){
   for (const [id, n] of Object.entries(S.data.nodes)) for (const row of n.r || []) for (const c of row) if (!(c in S.parent)) S.parent[c] = id;
   buildSearchIndex();
 }
-// Structured search index: saved metadata plus local hierarchy-derived filters for older files.
+// Structured search index: ONLY fields explicitly saved in each placement's search metadata.
+// Folder names, hierarchy and built-in labels never invent filters. Add a field by tagging
+// content with value.field syntax; it appears automatically once that metadata is present.
 // Built once per content load/update; typing and filter changes never touch the network, KV or D1.
-function locationMetaForNode(id){
-  // Level and semester are structural facts already represented by the folder tree.
-  // Derive them locally for filters; never write these synthetic values back to D1/KV.
-  const out = {};
-  for (const ancestorId of chain(id)) {
-    const name = String(node(ancestorId)?.n || "").trim();
-    let m = name.match(/^level\s+(\d+)$/i);
-    if (m && out.l == null) out.l = Number(m[1]);
-    m = name.match(/^semester\s+(\d+)$/i);
-    if (m && out.sem == null) out.sem = Number(m[1]);
-  }
-  return out;
-}
 function buildSearchIndex(){
   const entries = [], fieldOrder = [];
   for (const [id, n] of Object.entries(S.data.nodes)) {
     (n.f || []).forEach((f, i) => {
-      const stored = normalizeSearchMeta(f.sm) || {};
-      // Hierarchy fields make Level/Semester filters useful even for old placements
-      // whose saved search metadata predates these fields. Explicit tags take precedence.
-      const sm = Object.assign(locationMetaForNode(id), stored);
-      if (!Object.keys(sm).length) return;
+      const meta = normalizeSearchMeta(f.sm) || {};
+      if (!Object.keys(meta).length) return;
       const entry = {
-        id, i, f, meta: sm,
+        id, i, f, meta,
         hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "") + " " + pathNames(id).join(" "))
       };
-      for (const [key, value] of Object.entries(sm)) {
+      for (const [key, value] of Object.entries(meta)) {
         entry[key] = value;
         if (!fieldOrder.includes(key)) fieldOrder.push(key);
       }
@@ -552,18 +538,10 @@ function renderNode(){
 }
 
 function hasActiveFilters(){ return Object.values(S.filters).some(v => v !== "" && v != null); }
-function filterLabel(key){ return SEARCH_FIELDS[key]?.label || String(key).toUpperCase(); }
-function filterValueLabel(key, value){
-  const def = SEARCH_FIELDS[key];
-  if (def?.role === "level") return "Level " + value;
-  if (def?.role === "semester") return "Semester " + value;
-  if (def?.dictionary) {
-    const d = SEARCH_DICTIONARY[def.dictionary] || {};
-    const item = d[String(value)] || d[String(value).toUpperCase()];
-    if (item) return item.label || item.name || String(value);
-  }
-  return String(value);
-}
+function filterLabel(key){ return String(key); }
+// Filter values are shown as stored, without interpreting keys or translating values through
+// the legacy natural-language dictionary. The admin-owned value.field metadata is the source of truth.
+function filterValueLabel(_key, value){ return String(value); }
 function fieldValues(entry, key){
   const value = entry.meta?.[key];
   return value == null ? [] : (Array.isArray(value) ? value : [value]).map(v => String(v));
