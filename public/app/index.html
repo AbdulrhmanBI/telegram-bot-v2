@@ -67,18 +67,18 @@ h2{margin:6px 0 2px;font-size:20px}
 .ftitle{font-weight:600;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .fsub{font-size:12px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 
+/* filters (generated from the loaded metadata) */
+.filters{display:flex;gap:6px;overflow-x:auto;margin-top:8px;padding-bottom:2px;scrollbar-width:none}
+.filters[hidden]{display:none}
+.filters select,.filters .clr{flex:none;max-width:46vw;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 8px;font-size:13px}
+.filters select.on{border-color:var(--accent);color:var(--accent)}
+.filters .clr{color:var(--muted)}
+
 /* search results */
 .sub-h{margin:20px 2px 4px;font-size:16px;font-weight:700;overflow-wrap:anywhere}
 .sub-h:first-of-type{margin-top:6px}
 .grp{margin:12px 2px 6px;font-size:13px;font-weight:650;color:var(--accent)}
 .hint{margin-top:6px;font-size:13px;color:var(--muted)}
-.filters{display:none;gap:8px;flex-wrap:wrap;margin-top:8px}
-.filters.show{display:flex}
-.filters label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted);min-width:0;flex:1 1 110px}
-.filters select{width:100%;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:13px}
-.filters select.on{border-color:var(--accent)}
-.filters .fclear{align-self:flex-end;border:0;background:var(--accent-soft);color:var(--danger);border-radius:10px;padding:9px 12px;font-size:13px}
-.iconbtn.on{border-color:var(--accent);background:var(--accent-soft)}
 
 /* notes / urls */
 .note,.url{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -137,10 +137,9 @@ h2{margin:6px 0 2px;font-size:20px}
 <header class="top">
   <div class="bar">
     <input id="q" class="search" type="search" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="search">
-    <button id="fBtn" class="iconbtn" type="button" aria-label="Filters" title="Filters" hidden>⚙️</button>
     <button id="themeBtn" class="iconbtn" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
-  <div id="filters" class="filters" role="group" aria-label="filters"></div>
+  <div id="filters" class="filters" role="group" aria-label="filters" hidden></div>
   <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
 </header>
 
@@ -166,8 +165,7 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchFields, makeEntry, effectiveConstraints, buildContext, groupResults,
-  buildFilterModel, sanitizeFilters, normalizeText
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText, makeEntry, withFilters, getFacets
 } from "./search-core.js?v=2";
 
 (() => {
@@ -175,7 +173,7 @@ import {
 
 /* ───────────── i18n ───────────── */
 const I18N = { en: {
-    title:"Library", search:"Search… e.g. ma lec 2", searchTry:"Try for example:  ma  ·  ma lec  ·  ma 2  ·  ma lec 2", filters:"Filters", anyValue:"Any", clearFilters:"Clear filters", capNote:"Showing the first {n} results — type more to narrow down.", root:"Home", folders:"Folders", files:"Files",
+    title:"Library", search:"Search… e.g. ma lec 2", searchTry:"Try for example:  ma  ·  ma lec  ·  ma 2  ·  ma lec 2  ·  schedule level 3", filters:"Filters", clearFilters:"Clear", capNote:"Showing the first {n} results — type more to narrow down.", root:"Home", folders:"Folders", files:"Files",
     notes:"Notes", links:"Links", selectAll:"Select all", unselectAll:"Unselect all", copy:"Copy", copied:"Copied",
     cart:"File cart", review:"Review & send", send:"Send to Telegram", sending:"Sending…", clear:"Clear",
     empty:"This folder is empty.", noResults:"No results.", results:"results", items:"items", filesN:"files", foldersN:"folders",
@@ -220,7 +218,7 @@ const S = {
   cart: LS.get("lib:cart", []),
   cur: null, trail: [], query: "", sending: false, sheet: null, banner: null,
   sindex: [], sctx: null,         // local structured-search index (built once per content load)
-  filters: {}, fOpen: false, fmodel: [], qp: null
+  filters: {}                     // dependent filters: { field: Set(atom) }, generated from the loaded metadata
 };
 const T = (k, p) => {
   let s = I18N.en[k] || k;
@@ -269,21 +267,19 @@ function indexParents(){
   for (const [id, n] of Object.entries(S.data.nodes)) for (const row of n.r || []) for (const c of row) if (!(c in S.parent)) S.parent[c] = id;
   buildSearchIndex();
 }
-// Structured search index: only files that carry metadata (`sm`) take part. Field-agnostic: whatever
-// fields the server sent ({s,t,n,l,sem,v,doctor,...}) are indexed as they are. Built once per content
+// Structured search index: only files that carry metadata (`sm`) take part. Built once per content
 // load/update; typing never touches the network, KV or D1.
 function buildSearchIndex(){
   const entries = [];
   for (const [id, n] of Object.entries(S.data.nodes)) {
     (n.f || []).forEach((f, i) => {
-      const sm = f.sm;
-      if (!sm || typeof sm !== "object" || !Object.keys(sm).length) return;
-      entries.push(makeEntry({ id, i, f, hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "")) }, sm));
+      // `sm` is a flat object with ANY fields; makeEntry normalizes it and precomputes the comparable values.
+      const e = makeEntry(f.sm, { id, i, f, hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "")) });
+      if (e) entries.push(e);
     });
   }
   S.sindex = entries;
   S.sctx = buildContext(entries);
-  S.filters = {};
 }
 function chain(id){
   const out = []; let cur = String(id), g = 0, root = String(S.data.root);
@@ -560,55 +556,36 @@ function resultCard(e, title){
 }
 
 const RESULT_CAP = 300;
-const noRes = (r) => '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
-
-// parsed query + dependent filter model, computed once per render (pure, local)
-function prepSearch(){
-  const q = parseQuery(S.query);
-  S.qp = q;
-  S.filters = sanitizeFilters(S.sindex, { query: q.fields, filters: S.filters });
-  S.fmodel = buildFilterModel(S.sindex, { query: q.fields, filters: S.filters });
-}
-const hasFilters = () => Object.keys(S.filters).length > 0;
-
-function renderFilters(){
-  const box = $("filters"), btn = $("fBtn");
-  const usable = S.sindex.length > 0 && S.fmodel.length > 0;
-  btn.hidden = !usable;
-  btn.classList.toggle("on", hasFilters());
-  box.classList.toggle("show", usable && (S.fOpen || hasFilters()));
-  if (!usable) { box.innerHTML = ""; return; }
-  let h = "";
-  for (const f of S.fmodel) {
-    h += '<label dir="auto"><span>' + esc(f.label) + '</span><select data-f="' + esc(f.key) + '" class="' + (f.selected != null ? "on" : "") + '"><option value="">' + esc(T("anyValue")) + "</option>";
-    for (const o of f.options) h += '<option value="' + esc(String(o.value)) + '"' + (f.selected != null && String(f.selected) === String(o.value) ? " selected" : "") + ">" + esc(o.label) + "</option>";
-    h += "</select></label>";
-  }
-  if (hasFilters()) h += '<button class="fclear" type="button" data-fclear="1">' + esc(T("clearFilters")) + "</button>";
-  box.innerHTML = h;
-}
-
 function renderSearch(){
-  const q = S.qp;
-  if (q.empty && !hasFilters()) return "";
+  const raw = S.query;
+  const q0 = parseQuery(raw);
+  if (q0.empty) return "";
+  const q = withFilters(q0, S.filters);            // search words + filters: every constraint applies
+  const filtered = q !== q0;
+  const none = () => '<div class="meta">0 ' + T("results") + '</div><div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>";
 
-  // Nothing structured in the query and no filter (or content without metadata yet): classic text search.
-  if ((!q.recognized && !hasFilters()) || !S.sindex.length) return noRes(legacySearch(S.query));
+  // Words that mean nothing to the dictionary (or content with no metadata yet): classic text search.
+  if (!q.recognized || !S.sindex.length) {
+    const r = legacySearch(raw);
+    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+  }
 
-  // Structured search + filters: every field mentioned is a constraint, everything else is ANY.
-  const cons = effectiveConstraints(q.fields, S.filters);
-  const eff = { fields: cons, text: q.text };
-  const matches = S.sindex.filter((e) => matchFields(e, cons) && q.text.every((w) => e.hay.includes(w)));
-  if (!matches.length) return hasFilters() ? '<div class="empty">' + T("noResults") + "</div>" : noRes(legacySearch(S.query));   // metadata-less content stays findable by text
-  const blocks = groupResults(matches, eff, S.sctx);
+  // Structured search: a field the user did not type (or filter) means ANY value for that field.
+  const matches = S.sindex.filter((e) => matchEntry(e, q));
+  if (!matches.length) {
+    if (filtered) return none();      // the plain-text fallback knows nothing about filters
+    const r = legacySearch(raw);      // metadata-less content stays findable by plain text
+    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+  }
+  const blocks = groupResults(matches, q, S.sctx);
   let h = '<div class="meta">' + matches.length + " " + T("results") + "</div>";
   let shown = 0;
   for (const b of blocks) {
     if (shown >= RESULT_CAP) break;
-    h += '<div class="sub-h" dir="auto">' + esc(b.title + b.suffix) + "</div>";
+    h += '<div class="sub-h" dir="auto">' + esc(b.name + b.suffix) + "</div>";
     for (const g of b.groups) {
       if (shown >= RESULT_CAP) break;
-      if (b.showHeadings && g.heading) h += '<div class="grp" dir="auto">' + esc(g.heading) + "</div>";
+      if (b.showHeadings) h += '<div class="grp" dir="auto">' + esc(g.heading) + "</div>";
       h += '<div class="files">';
       for (const it of g.items) { if (shown >= RESULT_CAP) break; h += resultCard(it.e, it.title); shown++; }
       h += "</div>";
@@ -634,13 +611,52 @@ function normalizeFolderGrid(){
   if (items.length % 2 === 1 && items.length) items[items.length - 1].style.gridColumn = '1 / -1';
 }
 
+// Filters are generated from the registry + the metadata that is actually loaded: no field is hard-coded here.
+function renderFilters(){
+  const el = $("filters");
+  if (!S.query.trim()) S.filters = {};
+  if (!S.query.trim() || !S.sindex.length) { el.hidden = true; el.innerHTML = ""; return; }
+  const base = parseQuery(S.query).fields;
+  let facets = getFacets(S.sindex, S.filters, { base });
+  // a change above can invalidate a selection below: drop what no longer exists
+  for (const f of facets) {
+    const sel = S.filters[f.field];
+    if (sel && ![...sel].every((v) => f.options.some((o) => o.value === v))) delete S.filters[f.field];
+  }
+  facets = getFacets(S.sindex, S.filters, { base });
+  let h = "";
+  for (const f of facets) {
+    const sel = f.selected.length ? f.selected[0] : null;
+    if (!f.narrows && sel == null) continue;
+    h += '<select data-f="' + esc(f.field) + '" class="' + (sel != null ? "on" : "") + '" aria-label="' + esc(f.label) + '"><option value="">' + esc(f.label) + "</option>";
+    for (const o of f.options) {
+      const label = /^\d+$/.test(o.label) ? f.label + " " + o.label : o.label;     // "3" -> "Level 3"
+      h += '<option value="' + esc(typeof o.value + ":" + o.value) + '"' + (sel === o.value ? " selected" : "") + ">" + esc(label) + "</option>";
+    }
+    h += "</select>";
+  }
+  if (h && Object.keys(S.filters).length) h += '<button class="clr" data-clrf="1">✕ ' + esc(T("clearFilters")) + "</button>";
+  el.innerHTML = h;
+  el.hidden = !h;
+}
+$("filters").addEventListener("change", (e) => {
+  const sel = e.target.closest && e.target.closest("select[data-f]");
+  if (!sel) return;
+  const field = sel.dataset.f, raw = sel.value;
+  if (!raw) delete S.filters[field];
+  else { const i = raw.indexOf(":"); const type = raw.slice(0, i), val = raw.slice(i + 1); S.filters[field] = new Set([type === "number" ? Number(val) : val]); }
+  renderAll();
+});
+$("filters").addEventListener("click", (e) => {
+  if (e.target.closest && e.target.closest("[data-clrf]")) { S.filters = {}; renderAll(); }
+});
+
 function renderAll(keepScroll){
   if (!S.data) return;
   const y = window.scrollY;
   renderCrumbs();
-  prepSearch();
   renderFilters();
-  $("app").innerHTML = (S.query.trim() || hasFilters()) ? renderSearch() : renderNode();
+  $("app").innerHTML = S.query.trim() ? renderSearch() : renderNode();
   normalizeFolderGrid();
   renderCartBar();
   if (S.sheet) renderSheet();
@@ -823,8 +839,6 @@ document.addEventListener("click", (e) => {
   const go = t.closest("[data-go]"); if (go && !go.disabled) { open(go.dataset.go, true); haptic(); return; }
   const tgl = t.closest("[data-tg]"); if (tgl) { const [n, k] = tgl.dataset.tg.split("|"); toggle(n, k); return; }
   const rm = t.closest("[data-rm]"); if (rm) { const [n, k] = rm.dataset.rm.split("|"); S.cart = S.cart.filter((c) => !(c.n === n && c.k === k)); persist(); renderAll(true); return; }
-  if (t.closest("[data-fclear]")) { S.filters = {}; renderAll(); return; }
-  if (t.closest("#fBtn")) { S.fOpen = !S.fOpen; renderAll(true); return; }
   const cp = t.closest("[data-copy]"); if (cp) { const nd = node(S.cur); const txt = nd && nd.o && nd.o[Number(cp.dataset.copy)]; if (txt) { (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast(T("copied"))).catch(() => {}); } return; }
   const act = t.closest("[data-act]");
   if (act) {
@@ -844,13 +858,6 @@ $("q").addEventListener("input", (e) => {
   S.query = e.target.value;
   cancelAnimationFrame(qRaf);
   qRaf = requestAnimationFrame(() => renderAll());
-});
-document.addEventListener("change", (e) => {
-  const sel = e.target && e.target.closest && e.target.closest("select[data-f]");
-  if (!sel) return;
-  const key = sel.dataset.f, m = S.fmodel.find((x) => x.key === key), opt = m && m.options.find((o) => String(o.value) === sel.value);
-  if (opt) S.filters = { ...S.filters, [key]: opt.value }; else { const n = { ...S.filters }; delete n[key]; S.filters = n; }
-  renderAll();
 });
 window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
 

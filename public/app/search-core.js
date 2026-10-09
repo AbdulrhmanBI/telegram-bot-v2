@@ -1,37 +1,35 @@
 // ============================================================================
-// search-core.js — shared, dependency-free, FIELD-AGNOSTIC search engine (ES module)
+// search-core.js — shared, dependency-free, FIELD-AGNOSTIC search logic (ES module)
 //
 // Used by BOTH sides so there is exactly ONE source of truth:
-//   * the Mini App (public/app/index.html)         -> local, real-time search + filters
+//   * the Mini App (public/app/index.html)         -> local, real-time search
 //   * the Worker   (src/worker.js, miniapp-api.js) -> validating / serializing the admin "search name"
 //
-// The engine knows only the GENERIC model:
+// Model (never shown to normal users): an item carries a flat metadata object
+//     { s: "MA", t: "LEC", n: 2, l: 3, sem: 1, v: "HALLS", doctor: "Dr Ahmed", ... }
+// Admin syntax:   [value].field        e.g.  [MA].s [Lec].t [2].n [3].l [1].sem
 //
-//     meta   = { <field>: <value>, ... }          any keys   e.g. { s:"MA", t:"LEC", n:2, l:3 }
-//     admin  =  [value].field [value].field ...    any fields
-//     query  = every field the user mentions is a constraint; fields not mentioned are ANY
+// THE CORE KNOWS NO FIELD NAMES. Everything field-specific lives in DATA:
+//   SEARCH_FIELDS    what each known field is (kind, aliases, dictionary, display format ...)
+//   SEARCH_DICTIONARY the vocabularies for enum fields (subjects, types, variants ...)
+//   SEARCH_VIEW      how results are grouped / titled / described
+//   PATH_RULES       which metadata can be derived from the folder path
+// Adding a field = adding an entry to SEARCH_FIELDS (and a dictionary if it is an enum).
+// A field that is NOT registered still works: it is parsed, kept, serialized, indexed and matched
+// as generic text.
 //
-// Nothing in the parser / normalizer / matcher / index / filters mentions "s", "t" or "n".
-// What a field MEANS comes from configuration only:
-//
-//     SEARCH_FIELDS      field registry   (kind, natural-language words, bare-number, path derivation …)
-//     SEARCH_DICTIONARY  values + aliases for the fields that use a dictionary
-//     SEARCH_PROFILES    how results are grouped / titled
-//
-// Add a field  = add one entry to SEARCH_FIELDS   (and a dictionary if it is an enum).
-// Unknown fields are never discarded: they are preserved as generic text metadata.
+// Golden rule: a field the user does not type means ANY value for that field.
+// No fuzzy guessing: a word only means something if it is an explicit alias / field word.
+// The only "looseness" is prefix completion of the word the user is still typing.
 // ============================================================================
 
 export const SEARCH_CORE_REV = 2;
-export const MAX_NUMBER = 999;                 // numbers above this are treated as plain text (e.g. a year)
-const MAX_RANGE_ITEMS = 60;
-const MAX_FIELDS_PER_ITEM = 16;
-const MAX_TEXT = 80;
 
 // ----------------------------------------------------------------------------
-// 1. Dictionary — values and aliases of the enum fields. Extend freely.
-//    Codes are STABLE identifiers stored in the data: never rename a code, rename its label.
-//    Entry shape: { name|label, plural?, order?, aliases: [...] }
+// 1. Dictionaries (vocabularies of enum fields) — extend by adding entries.
+//    Codes are STABLE identifiers stored in the data: never rename a code, rename its `name`/`label`.
+//    The same alias MAY appear in two different dictionaries (e.g. "sections" is both the Section
+//    type and the Sections schedule variant); the query parser resolves it from context.
 // ----------------------------------------------------------------------------
 export const SEARCH_DICTIONARY = {
   subjects: {
@@ -58,6 +56,7 @@ export const SEARCH_DICTIONARY = {
     ACST: { name: "Accounting Studies", aliases: ["acst", "accounting studies", "دراسات محاسبية", "دراسات"] }
   },
 
+  // `order` controls sorting inside a result group. `plural` is used in headers.
   types: {
     LEC:        { label: "Lecture",    plural: "Lectures",    order: 1,  aliases: ["lec", "lecs", "lecture", "lectures", "محاضرة", "محاضرات"] },
     REC:        { label: "Record",     plural: "Records",     order: 2,  aliases: ["rec", "recs", "record", "records", "recording", "recordings", "تسجيل", "تسجيلات"] },
@@ -72,97 +71,131 @@ export const SEARCH_DICTIONARY = {
     BOOK:       { label: "Book",       plural: "Books",       order: 11, aliases: ["book", "books", "كتاب", "كتب"] },
     COURSE:     { label: "Course",     plural: "Courses",     order: 12, aliases: ["course", "courses", "crs", "كورس", "كورسات"] },
     SCHEDULE:   { label: "Schedule",   plural: "Schedules",   order: 13, aliases: ["schedule", "schedules", "class schedule", "class schedules", "جدول", "جداول", "جدول المحاضرات"] },
-    APPENDIX:   { label: "Appendix",   plural: "Appendices",  order: 14, aliases: ["appendix", "appendices", "ملحق", "ملاحق"] }
+    APPENDIX:   { label: "Appendix",   plural: "Appendices",  order: 14, aliases: ["appendix", "appendices", "appendixes", "ملحق", "ملاحق"] }
   },
 
-  // Sub-kind of an item (used by schedules today: by halls / by groups / …)
+  // Variants of an item inside its type (today: the flavours of a class schedule).
   variants: {
-    HALLS:    { label: "By halls",    order: 1, aliases: ["halls", "hall", "by halls", "by hall", "قاعات", "بالقاعات"] },
-    GROUPS:   { label: "By groups",   order: 2, aliases: ["groups", "by groups", "by group", "جروبات", "مجموعات"] },
-    SECTIONS: { label: "Sections",    order: 3, aliases: ["sections", "by sections", "سكاشن"] },
-    MIDTERM:  { label: "Mid-term",    order: 4, aliases: ["midterm", "midterms", "mid term", "mid terms", "ميد", "ميدتيرم", "نصف الترم"] },
-    FINAL:    { label: "Final exams", order: 5, aliases: ["final", "finals", "final exam", "final exams", "فاينال", "الفاينال", "نهائي"] }
+    HALLS:    { label: "Halls",    order: 1, aliases: ["halls", "hall", "by halls", "by hall", "قاعات"] },
+    GROUPS:   { label: "Groups",   order: 2, aliases: ["groups", "group", "by groups", "by group", "مجموعات"] },
+    SECTIONS: { label: "Sections", order: 3, aliases: ["sections", "section", "by sections", "by section"] },
+    MIDTERM:  { label: "Midterm",  order: 4, aliases: ["midterm", "midterms", "mid term", "mid terms", "ميدتيرم"] },
+    FINAL:    { label: "Final",    order: 5, aliases: ["final", "finals", "final exam", "final exams", "فاينل", "نهائي"] }
   },
 
   // Words that carry no meaning in a query ("ma lecture of 2"). Explicit list, nothing is guessed.
-  fillers: ["the", "of", "for", "and", "in"]
+  fillers: ["the", "of", "for", "and", "in", "no", "num", "number", "#"]
 };
 
+export const MAX_NUMBER = 999;       // numbers above this are treated as plain text (e.g. a year)
+const MAX_RANGE_ITEMS = 60;
+const MAX_TEXT_VALUE = 80;           // longest stored value of a free-text field
+const CODE_RE = /^[A-Za-z0-9_]{1,16}$/;
+const FIELD_KEY_RE = /^[a-z][a-z0-9_]{0,23}$/;
+
 // ----------------------------------------------------------------------------
-// 2. Field registry — DATA, not logic.
-//    kind        "enum"   value comes from a dictionary          (dictionary: "<name>")
-//                "number" integer, or range/list  1-3  1,3,5
-//                "text"   free text (also the fallback for fields that are NOT registered)
-//    words       natural-language words that introduce the field in a query: "level 3", "dr ahmed".
-//                They also work as admin tags:  [3].level
-//    bare        a bare number in a query ("ma 2") belongs to this field (at most one field)
-//    chip        how a value is shown in short form ("Level {{v}}")
-//    fromPath    regex (on the normalized folder name) that derives the value from the folder tree,
-//                nearest ancestor wins — so admins never type it
-//    filterOrder position in the dependent filter chain (lower = earlier); filter:false hides it
+// 2. Field registry — DATA, not logic.  Object order = canonical field order.
+//
+//    key         identifier stored in the data (lower-case, a-z0-9_)
+//    label       human name ("Subject")
+//    kind        "enum"   a code from a dictionary (or a free short code when no dictionary)
+//                "number" one number, or (multi:true) a list/range
+//                "text"   free text (also what an UNREGISTERED field behaves like)
+//    dictionary  name of the vocabulary inside SEARCH_DICTIONARY (enum only)
+//    aliases     other names: usable as admin tag ([x].level) AND as a query word ("level 3")
+//    bare        number field that receives a bare number in a query ("ma 2") — at most one
+//    multi       number field that accepts ranges/lists ([1-3].n)
+//    ambiguousAliases  enum field whose aliases may deliberately map to several codes ("stat" -> STA, STB)
+//    format      display of a number: "Level {v}"
+//    describe    template used by describeMeta (default: "{{key.full}}")
+//    parse / normalize   OPTIONAL custom hooks:  parse(raw, ctx) -> {ok,value}|{ok:false,error}
+//                                                normalize(value, ctx) -> value | undefined
+//
+//    Query words are the key + aliases.  "level 3" / "l 3" / "sem 1" / "doctor ahmed" work for any
+//    registered field; a field word only counts when a value follows it.
 // ----------------------------------------------------------------------------
 export const SEARCH_FIELDS = {
-  s:   { label: "Subject",  kind: "enum",   dictionary: "subjects", words: ["subject"], filterOrder: 30 },
-  t:   { label: "Type",     kind: "enum",   dictionary: "types",    words: ["type"],    filterOrder: 40 },
-  n:   { label: "Number",   kind: "number", bare: true, words: ["number", "no", "num"], chip: "#{{v}}", filterOrder: 60 },
-  l:   { label: "Level",    kind: "number", words: ["level", "lvl", "l"], chip: "Level {{v}}", fromPath: "^level (\\d+)\\b", filterOrder: 10 },
-  sem: { label: "Semester", kind: "number", words: ["semester", "sem"], chip: "Semester {{v}}", fromPath: "^semester (\\d+)\\b", filterOrder: 20 },
-  v:   { label: "Variant",  kind: "enum",   dictionary: "variants", filterOrder: 50 },
-  doctor: { label: "Doctor", kind: "text", words: ["doctor", "dr"], filterOrder: 70 },
-  group:  { label: "Group",  kind: "text", words: ["group"],        filterOrder: 80 }
+  s:   { key: "s", label: "Subject", kind: "enum", dictionary: "subjects", aliases: ["subj", "subject"], ambiguousAliases: true, describe: "{{s.code}} ({{s}})" },
+  t:   { key: "t", label: "Type", kind: "enum", dictionary: "types", aliases: ["type"] },
+  n:   { key: "n", label: "Number", kind: "number", multi: true, bare: true, aliases: ["no", "num", "number"], format: "#{v}" },
+  l:   { key: "l", label: "Level", kind: "number", aliases: ["level", "lvl"], format: "Level {v}" },
+  sem: { key: "sem", label: "Semester", kind: "number", aliases: ["semester"], format: "Semester {v}" },
+  v:   { key: "v", label: "Variant", kind: "enum", dictionary: "variants", aliases: ["variant"] }
 };
 
 // ----------------------------------------------------------------------------
-// 3. Result profiles — how matches are grouped and titled. Data, evaluated by a small template engine.
-//    The FIRST profile whose `when` matches an item is used (`when: {}` matches everything).
+// 3. View configuration — how results are grouped, titled and described. Also DATA.
 //
-//    blockBy / blockTitle   one result block per distinct value-combination of the blockBy fields
-//    blockSuffix            parts built from the QUERY constraints, appended to the block title
-//    groupBy / groupTitle   sub-groups inside a block (headings hidden if the query constrains headingsUnlessQuery)
-//    anchor                 an item kind that "owns" its siblings: { where, by, title } — a Summary that
-//                           shares (s,n) with a Lecture reads "Lecture 2 Summary"
-//    itemTitle              {{field}} {{field:plural}} {{field:chip}} {{anchor}} {{a|b|'literal'}} {{x?}} (optional)
-//    A template is a string or an array of parts; a part with an empty (non-optional) placeholder is
-//    dropped, the surviving parts are joined with " · ".
+//    filters     order of the dependent filters (fields present in the data but not listed follow)
+//    layouts     first layout whose `when` fields are all present on an item wins
+//      blockBy   fields that split results into blocks      block   header segments (joined by " · ")
+//      groupBy   fields that split a block into groups      group   {anchored, plain, none} templates
+//      anchor    {where, keyBy, label}: items that share `keyBy` values with an item matching `where`
+//                (e.g. a Lecture) get that item's label in their title ("Lecture 2 Summary")
+//      title     rules, first match wins: {when?:[fields], anchored?:true, tpl}
+//      sortBy    fields that order the items of a group
+//      suffix    constrained fields echoed in the block header ("— Lectures · #2")
+//      flatWhenConstrained   no group headings when the user already constrained one of these
+//    Template placeholders:  {{field}} short value · {{field.full}} labelled ("Level 3")
+//                            {{field.plural}} · {{field.code}} · {{anchor}}
 // ----------------------------------------------------------------------------
-export const SEARCH_PROFILES = [
-  {
-    id: "schedule", order: 20,
-    when: { t: "SCHEDULE" },
-    blockBy: ["t", "l", "sem"],
-    blockTitle: ["{{t}}", "{{l:chip}}", "{{sem:chip}}"],              // Schedule · Level 3 · Semester 1
-    blockSuffix: [],
-    groupBy: [],
-    itemTitle: ["{{v|t}}"],
-    sortBy: ["v"]
-  },
-  {
-    id: "default", order: 10,
-    when: {},
-    blockBy: ["s"],
-    blockTitle: ["{{s|'Other'}}"],
-    blockSuffix: ["{{t:plural}}", "{{n:chip}}"],                         // Managerial Accounting — Lectures · #2
-    groupBy: ["n"],
-    groupTitle: ["{{anchor|n:chip|'General'}}"],                        // Lecture 3 | #3 | General
-    headingsUnlessQuery: ["t", "n"],
-    anchor: { where: { t: "LEC" }, by: ["s", "n"], title: ["{{t}} {{n}}"] },
-    itemTitle: ["{{t}} {{n?}}"],                                        // Summary 2 | Book
-    itemTitleAnchored: ["{{anchor}} {{t}}"],                            // Lecture 2 Summary
-    sortBy: ["t"]
-  }
+export const SEARCH_VIEW = {
+  filters: ["l", "s", "t", "n", "sem", "v"],
+  layouts: [
+    {
+      id: "by-subject",
+      when: ["s"],
+      blockBy: ["s"],
+      block: ["{{s}}"],
+      groupBy: ["n"],
+      group: { anchored: "{{anchor}} {{n}}", plain: "#{{n}}", none: "General" },
+      anchor: { where: { t: "LEC" }, keyBy: ["s", "n"], label: "{{t}}" },
+      title: [
+        { anchored: true, when: ["t", "n"], tpl: "{{anchor}} {{n}} {{t}}" },
+        { when: ["t"], tpl: "{{t}} {{n}}" },
+        { when: ["n"], tpl: "#{{n}}" }
+      ],
+      sortBy: ["t"],
+      suffix: ["t", "n"],
+      flatWhenConstrained: ["t", "n"]
+    },
+    {
+      // Items without a subject (class schedules, ...): described by type · level · semester, split by variant.
+      id: "generic",
+      when: [],
+      blockBy: ["t", "l", "sem"],
+      block: ["{{t}}", "{{l.full}}", "{{sem.full}}"],
+      groupBy: ["v"],
+      group: { anchored: "{{v}}", plain: "{{v}}", none: "General" },
+      title: [
+        { when: ["t", "v"], tpl: "{{t}} · {{v}}" },
+        { when: ["t"], tpl: "{{t}}" },
+        { when: ["v"], tpl: "{{v}}" }
+      ],
+      sortBy: ["v", "n"],
+      suffix: ["v"],
+      flatWhenConstrained: ["v"]
+    }
+  ]
+};
+
+// ----------------------------------------------------------------------------
+// 4. Path rules — metadata that can be DERIVED from the folder path (root -> leaf names).
+//    A rule is data:  { field, pattern, value }   (regex over the normalized folder name)
+//                 or  { field, dictionary:true, only?:[codes] }  (folder name is an alias of the field's dictionary)
+//    `when` makes a rule conditional on what was already derived; `standalone` marks rules strong
+//    enough to classify a file by path alone (used by the backfill tool).  Deeper folders win.
+// ----------------------------------------------------------------------------
+export const PATH_RULES = [
+  { field: "l",   pattern: "^(?:level|lvl) (\\d{1,2})$", value: "$1" },
+  { field: "sem", pattern: "^semester (\\d{1,2})$", value: "$1" },
+  { field: "t",   dictionary: true, only: ["SCHEDULE"], standalone: true },
+  { field: "t",   dictionary: true, only: ["APPENDIX"] },
+  { field: "v",   dictionary: true, when: { t: ["SCHEDULE"] } }
 ];
 
-const DEFAULT_CFG = { dict: SEARCH_DICTIONARY, fields: SEARCH_FIELDS, profiles: SEARCH_PROFILES, emptyTitle: "File" };
-
-function asCfg(x) {
-  if (!x) return DEFAULT_CFG;
-  if (x.fields && x.dict) return x;
-  if (x.subjects || x.types || x.variants) return { ...DEFAULT_CFG, dict: x };      // legacy: a bare dictionary
-  return DEFAULT_CFG;
-}
-
 // ----------------------------------------------------------------------------
-// 4. Normalization
+// 5. Normalization
 // ----------------------------------------------------------------------------
 export function normalizeText(input) {
   let s = String(input == null ? "" : input);
@@ -178,14 +211,16 @@ export function normalizeText(input) {
   s = s.replace(/(\p{L})(\p{N})/gu, "$1 $2").replace(/(\p{N})(\p{L})/gu, "$1 $2"); // lec2 -> lec 2
   return s.replace(/\s+/g, " ").trim();
 }
+
 const tokensOf = (norm) => (norm ? norm.split(" ") : []);
-const asArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const ownDef = (registry, key) => (registry && hasOwn(registry, key) ? registry[key] : null);
+const isCode = (v) => typeof v === "string" && CODE_RE.test(v);
 
 // ----------------------------------------------------------------------------
-// 5. Compiled lookups, derived ONLY from the configuration (cached per cfg object)
+// 6. Lookup tables, derived from (dictionary, registry). Cached; a signature detects new fields.
 // ----------------------------------------------------------------------------
-let CACHE = new WeakMap();
-export function resetSearchCache() { CACHE = new WeakMap(); }     // call after editing SEARCH_FIELDS/DICTIONARY at runtime
+const LOOKUP_CACHE = new WeakMap();   // dict -> WeakMap(registry -> {sig, lk})
 
 function addAlias(map, alias, code) {
   const key = normalizeText(alias);
@@ -194,71 +229,329 @@ function addAlias(map, alias, code) {
   map.get(key).add(code);
 }
 
-function compile(cfgIn) {
-  const cfg = asCfg(cfgIn);
-  const hit = CACHE.get(cfg);
-  if (hit) return hit;
-  const keys = Object.keys(cfg.fields);
-  const c = { cfg, keys, enums: {}, aliasLists: {}, orders: {}, phrases: new Map(), words: new Map(), bare: null, maxTokens: 1, fromPath: {}, fillers: null, kind: {} };
-  for (const key of keys) {
-    const f = cfg.fields[key];
-    const entries = f.kind === "enum" && f.dictionary ? cfg.dict[f.dictionary] : null;
-    c.kind[key] = f.kind === "number" ? "number" : entries ? "enum" : "text";
+function lookupSig(dict, registry) {
+  let sig = "";
+  for (const k of Object.keys(registry)) {
+    const d = registry[k] || {};
+    const size = d.dictionary && dict[d.dictionary] ? Object.keys(dict[d.dictionary]).length : 0;
+    sig += k + ":" + (d.kind || "") + ":" + (d.dictionary || "") + ":" + size + ":" + (d.aliases || []).length + ":" + (d.bare ? 1 : 0) + "|";
+  }
+  return sig + (dict.fillers || []).length;
+}
+
+export function buildLookup(dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
+  let perDict = LOOKUP_CACHE.get(dict);
+  if (!perDict) { perDict = new WeakMap(); LOOKUP_CACHE.set(dict, perDict); }
+  const sig = lookupSig(dict, registry);
+  const hit = perDict.get(registry);
+  if (hit && hit.sig === sig) return hit.lk;
+
+  const alias = new Map();        // field -> Map(normalized alias -> Set(codes))
+  const aliasList = new Map();    // field -> [[alias, Set(codes)], ...]
+  const order = {};               // field -> { code: sortRank }
+  const enumKeys = [];            // enum fields that have a dictionary, in registry order
+  const fieldWords = new Map();   // normalized query word -> field key
+  const tagNames = new Map();     // lower-case admin tag name -> field key
+  let bareField = null;
+  let maxTokens = 1;
+
+  for (const key of Object.keys(registry)) {
+    const def = registry[key];
+    if (!def) continue;
+    tagNames.set(String(key).toLowerCase(), key);
+    for (const a of def.aliases || []) if (!tagNames.has(String(a).toLowerCase())) tagNames.set(String(a).toLowerCase(), key);
+    for (const w of [key, ...(def.aliases || [])]) {
+      const nw = normalizeText(w);
+      if (nw && !fieldWords.has(nw)) fieldWords.set(nw, key);
+    }
+    if (def.bare && def.kind === "number" && !bareField) bareField = key;
+    const entries = def.kind === "enum" && def.dictionary ? dict[def.dictionary] : null;
     if (entries) {
       const map = new Map();
-      c.orders[key] = {};
-      Object.keys(entries).forEach((code, idx) => {
-        c.orders[key][code] = entries[code].order != null ? Number(entries[code].order) : 1000 + idx;
+      const codes = Object.keys(entries);
+      order[key] = {};
+      codes.forEach((code, i) => {
         addAlias(map, code, code);
         for (const a of entries[code].aliases || []) addAlias(map, a, code);
+        order[key][code] = Number(entries[code].order) || (100 + i);
       });
-      c.enums[key] = map;
-      c.aliasLists[key] = [...map.entries()];
-      for (const [alias, codes] of map) {
-        if (!c.phrases.has(alias)) c.phrases.set(alias, []);
-        c.phrases.get(alias).push({ field: key, codes });
-        c.maxTokens = Math.max(c.maxTokens, tokensOf(alias).length);
-      }
+      alias.set(key, map);
+      aliasList.set(key, [...map.entries()]);
+      enumKeys.push(key);
+      for (const k of map.keys()) maxTokens = Math.max(maxTokens, tokensOf(k).length);
     }
-    for (const w of f.words || []) { const nw = normalizeText(w); if (nw && !c.words.has(nw)) c.words.set(nw, key); }
-    if (f.bare && !c.bare) c.bare = key;
-    if (f.fromPath) { try { c.fromPath[key] = new RegExp(f.fromPath, "i"); } catch (_) {} }
   }
-  c.fillers = new Set((cfg.dict.fillers || []).map(normalizeText).filter(Boolean));
-  CACHE.set(cfg, c);
-  return c;
+  const fillers = new Set((dict.fillers || []).map(normalizeText).filter(Boolean));
+  const lk = { alias, aliasList, order, enumKeys, fieldWords, tagNames, bareField, fillers, maxTokens };
+  perDict.set(registry, { sig, lk });
+  return lk;
 }
 
-// Developer helper (used by tests): returns problems + the intentional cross-field ambiguities.
-export function validateConfig(cfgIn) {
-  const c = compile(cfgIn);
-  const problems = [], ambiguous = [];
-  for (const [phrase, cands] of c.phrases) {
-    if (cands.length > 1) ambiguous.push({ phrase, fields: cands.map((x) => x.field) });
-    if (c.fillers.has(phrase)) problems.push(`alias "${phrase}" is also a filler word`);
-    if (c.words.has(phrase)) problems.push(`alias "${phrase}" is also the field word of "${c.words.get(phrase)}"`);
+// Developer helper (used by tests): returns a list of human-readable problems.
+//   Same alias in two DIFFERENT fields is legal (resolved from context); `strict` reports it too.
+export function validateDictionary(dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS, opts = {}) {
+  const problems = [];
+  const lk = buildLookup(dict, registry);
+  for (const key of lk.enumKeys) {
+    for (const [alias, codes] of lk.alias.get(key)) {
+      if (lk.fillers.has(alias)) problems.push(`${key}: alias "${alias}" is also a filler word`);
+      if (!registry[key].ambiguousAliases && codes.size > 1) problems.push(`${key}: alias "${alias}" maps to several values: ${[...codes].join(", ")}`);
+    }
   }
-  for (const key of c.keys) if (!/^[a-z][a-z0-9_]{0,23}$/.test(key)) problems.push(`field key "${key}" is not a valid key`);
-  if (c.keys.filter((k) => cfgIn && false).length) problems.push("unreachable");
-  return { problems, ambiguous };
+  if (opts.strict) for (const [a, ka] of sharedAliases(dict, registry)) problems.push(`alias "${a}" is shared by fields ${ka.join(", ")}`);
+  return problems;
 }
 
-const kindOf = (c, key) => c.kind[key] || "text";
-const maxOf = (c, key) => { const f = c.cfg.fields[key]; return f && Number.isFinite(f.max) ? f.max : MAX_NUMBER; };
-const labelOfField = (c, key) => (c.cfg.fields[key] && c.cfg.fields[key].label) || key;
+// alias -> [fields that define it], only for aliases used by more than one field
+export function sharedAliases(dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
+  const lk = buildLookup(dict, registry);
+  const seen = new Map();
+  for (const key of lk.enumKeys) for (const alias of lk.alias.get(key).keys()) { if (!seen.has(alias)) seen.set(alias, []); seen.get(alias).push(key); }
+  return [...seen.entries()].filter(([, ks]) => ks.length > 1);
+}
 
 // ----------------------------------------------------------------------------
-// 6. Values: parse / normalize / format — all driven by the registry
+// 7. Values:  normalize / atoms / serialization
 // ----------------------------------------------------------------------------
-// `max` is configurable per field (SEARCH_FIELDS[x].max, e.g. a "year" field); default MAX_NUMBER.
-export function canonNumbers(n, max = MAX_NUMBER) {
-  const arr = asArray(n).map(Number).filter((x) => Number.isInteger(x) && x >= 0 && x <= max);
+const toNum = (x) => (typeof x === "number" ? x : (typeof x === "string" && /^\s*\d+\s*$/.test(x) ? Number(x) : NaN));
+
+// n is a number, or a sorted array of numbers when an item covers several (ranges / lists).
+export function canonNumbers(n) {
+  if (n == null) return null;
+  const arr = (Array.isArray(n) ? n : [n]).map(toNum).filter((x) => Number.isInteger(x) && x >= 0 && x <= MAX_NUMBER);
   const uniq = [...new Set(arr)].sort((a, b) => a - b);
   if (!uniq.length) return null;
   return uniq.length === 1 ? uniq[0] : uniq;
 }
 
-export function parseNumberSpec(raw, max = MAX_NUMBER) {
+function cleanText(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+  if (typeof v === "boolean") return v;
+  if (typeof v !== "string") return undefined;
+  const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT_VALUE);
+  return s || undefined;
+}
+
+function uniqMany(list) {
+  const out = [];
+  for (const x of list) if (x !== undefined && !out.some((y) => y === x)) out.push(x);
+  if (!out.length) return undefined;
+  return out.length === 1 ? out[0] : out.slice(0, 20);
+}
+
+function resolveAliasUnique(map, value) {
+  const codes = map && map.get(normalizeText(value));
+  return codes && codes.size === 1 ? [...codes][0] : null;
+}
+
+function normalizeEnumScalar(def, value, lk, key) {
+  if (typeof value === "number" && Number.isFinite(value)) value = String(value);
+  if (typeof value !== "string") return cleanText(value);
+  const s = value.trim();
+  if (!s) return undefined;
+  const map = lk.alias.get(key);
+  const entries = map && lk.order[key];
+  if (isCode(s)) {
+    const u = s.toUpperCase();
+    if (entries && hasOwn(entries, u)) return u;
+    return resolveAliasUnique(map, s) || u;           // known alias -> its code; otherwise keep the code as given
+  }
+  return resolveAliasUnique(map, s) || cleanText(s);   // not code-shaped: alias or plain text, never dropped
+}
+
+// One field value -> its normalized form, or undefined (= nothing storable).
+//   registered enum   -> code (aliases resolved)       registered number -> number | sorted number[]
+//   anything else     -> trimmed text / number / boolean (arrays of those allowed)
+export function normalizeFieldValue(field, value, opts = {}) {
+  const registry = opts.registry || SEARCH_FIELDS, dict = opts.dict || SEARCH_DICTIONARY;
+  const def = ownDef(registry, field);
+  if (def && typeof def.normalize === "function") {
+    try { const r = def.normalize(value, { field, registry, dict }); return r == null ? undefined : r; } catch (_) { return undefined; }
+  }
+  if (value == null) return undefined;
+  const kind = def ? def.kind : "text";
+  if (kind === "number") { const n = canonNumbers(value); return n == null ? undefined : n; }
+  if (kind === "enum") {
+    const lk = buildLookup(dict, registry);
+    return Array.isArray(value)
+      ? uniqMany(value.map((x) => normalizeEnumScalar(def, x, lk, field)))
+      : normalizeEnumScalar(def, value, lk, field);
+  }
+  return Array.isArray(value) ? uniqMany(value.map(cleanText)) : cleanText(value);
+}
+
+// "level" -> "l" ; "doctor" -> "doctor" ; junk / unsafe names -> null
+export function canonFieldKey(raw, registry = SEARCH_FIELDS, dict = SEARCH_DICTIONARY) {
+  const k = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!k) return null;
+  const lk = buildLookup(dict, registry);
+  if (lk.tagNames.has(k)) return lk.tagNames.get(k);
+  return FIELD_KEY_RE.test(k) ? k : null;
+}
+
+function fieldRank(key, registry) {
+  const keys = Object.keys(registry);
+  const i = keys.indexOf(key);
+  return i < 0 ? keys.length : i;
+}
+
+export function sortMetaKeys(keys, registry = SEARCH_FIELDS) {
+  return [...keys].sort((a, b) => fieldRank(a, registry) - fieldRank(b, registry) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// Accepts anything (parsed JSON from D1/KV, admin input) and returns a clean meta or null.
+// EVERY field survives (registered ones get their specialised normalization, others are kept as text).
+export function normalizeSearchMeta(meta, opts = {}) {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
+  const registry = opts.registry || SEARCH_FIELDS, dict = opts.dict || SEARCH_DICTIONARY;
+  const tmp = {};
+  for (const [rawKey, value] of Object.entries(meta)) {
+    const key = canonFieldKey(rawKey, registry, dict);
+    if (!key) continue;
+    const v = normalizeFieldValue(key, value, { registry, dict });
+    if (v === undefined) continue;
+    tmp[key] = v;
+  }
+  const keys = sortMetaKeys(Object.keys(tmp), registry);
+  if (!keys.length) return null;
+  const out = {};
+  for (const k of keys) out[k] = tmp[k];
+  return out;
+}
+
+// Canonical JSON text for a meta object (stable key order => no phantom diffs). Used by Worker + API.
+export function serializeSearchMeta(meta, opts = {}) {
+  const m = normalizeSearchMeta(meta, opts);
+  return m ? JSON.stringify(m) : null;
+}
+export function parseSearchMeta(text, opts = {}) {
+  if (text == null || text === "") return null;
+  try { return normalizeSearchMeta(typeof text === "string" ? JSON.parse(text) : text, opts); } catch (_) { return null; }
+}
+
+// Comparable atoms of one field value (what the matcher / facets compare):
+//   number fields -> numbers, enum -> UPPERCASE codes, everything else -> normalized text.
+function atomOf(def, v) {
+  if (v == null || v === "") return null;
+  const kind = def ? def.kind : "text";
+  if (kind === "number") { const n = toNum(v); return Number.isFinite(n) ? n : null; }
+  if (kind === "enum") return isCode(v) ? v.toUpperCase() : (normalizeText(v) || null);
+  if (typeof v === "number") return v;
+  return normalizeText(String(v)) || null;
+}
+export function atomsOf(field, value, opts = {}) {
+  if (value == null) return [];
+  const def = ownDef(opts.registry || SEARCH_FIELDS, field);
+  const out = [];
+  for (const v of Array.isArray(value) ? value : [value]) { const a = atomOf(def, v); if (a != null && !out.includes(a)) out.push(a); }
+  return out;
+}
+
+export const metaNumbers = (meta, field) => (meta && meta[field] != null ? (Array.isArray(meta[field]) ? meta[field] : [meta[field]]) : null);
+
+export function formatNumbers(n) {
+  const a = Array.isArray(n) ? n : (n == null ? null : [n]);
+  if (!a || !a.length) return "";
+  if (a.length === 1) return String(a[0]);
+  const contiguous = a.every((x, i) => i === 0 || x === a[i - 1] + 1);
+  return contiguous ? a[0] + "–" + a[a.length - 1] : a.join(", ");
+}
+
+// ----------------------------------------------------------------------------
+// 8. Display: values, templates, describe / syntax / short
+// ----------------------------------------------------------------------------
+export function subjectName(code, dict = SEARCH_DICTIONARY) {
+  const s = dict.subjects && dict.subjects[code];
+  return s ? s.name : String(code || "");
+}
+export function typeLabel(code, plural = false, dict = SEARCH_DICTIONARY) {
+  const t = dict.types && dict.types[code];
+  return t ? (plural ? t.plural || t.label : t.label) : String(code || "");
+}
+
+// mode: "short" (label / bare number) · "full" (labelled: "Level 3") · "plural" · "code"
+export function displayValue(field, value, mode = "short", opts = {}) {
+  if (value == null || value === "") return "";
+  const registry = opts.registry || SEARCH_FIELDS, dict = opts.dict || SEARCH_DICTIONARY;
+  const def = ownDef(registry, field);
+  if (Array.isArray(value) && !(def && def.kind === "number")) return value.map((x) => displayValue(field, x, mode, opts)).join(", ");
+  if (def && def.kind === "number") {
+    const f = formatNumbers(value);
+    if (mode === "short" || mode === "code") return f;
+    return (def.format || (def.label ? def.label + " {v}" : "{v}")).replace("{v}", f);
+  }
+  if (def && def.kind === "enum" && def.dictionary && dict[def.dictionary]) {
+    const e = dict[def.dictionary][value];
+    if (mode === "code") return String(value);
+    if (!e) return String(value);
+    const short = e.label || e.name || String(value);
+    return mode === "plural" ? (e.plural || short) : short;
+  }
+  return String(value);
+}
+
+const TPL_RE = /\{\{\s*([a-z][a-z0-9_]*)(?:\.(short|full|plural|code))?\s*\}\}/gi;
+export function renderTemplate(tpl, meta, opts = {}) {
+  const vars = opts.vars || {};
+  const out = String(tpl).replace(TPL_RE, (_, f, mode) => {
+    const key = f.toLowerCase();
+    if (hasOwn(vars, key)) return String(vars[key] == null ? "" : vars[key]);
+    return displayValue(key, meta ? meta[key] : null, mode || "short", opts);
+  });
+  return out.replace(/\s+/g, " ").trim();
+}
+const renderSegments = (segs, meta, opts = {}, sep = " · ") =>
+  (Array.isArray(segs) ? segs : [segs]).map((s) => renderTemplate(s, meta, opts)).filter(Boolean).join(sep);
+
+// "MA (Managerial Accounting) · Lecture · #2" / "Schedule · Level 3 · Semester 1 · Final" /  "doctor: Dr Ahmed"
+export function describeMeta(meta, dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
+  if (!meta || typeof meta !== "object") return "—";
+  const opts = { dict, registry };
+  const parts = [];
+  for (const key of sortMetaKeys(Object.keys(meta), registry)) {
+    if (meta[key] == null) continue;
+    const def = ownDef(registry, key);
+    const tpl = def ? (def.describe || "{{" + key + ".full}}") : key + ": {{" + key + "}}";
+    const r = renderTemplate(tpl, meta, opts);
+    if (r) parts.push(r);
+  }
+  return parts.join(" · ") || "—";
+}
+
+// Canonical admin syntax for a meta, e.g. "[MA].s [LEC].t [2].n [3].l"
+export function metaToSyntax(meta, registry = SEARCH_FIELDS) {
+  if (!meta) return "";
+  const out = [];
+  for (const key of sortMetaKeys(Object.keys(meta), registry)) {
+    const v = meta[key];
+    if (v == null) continue;
+    const def = ownDef(registry, key);
+    let text;
+    if (def && def.kind === "number") text = formatNumbers(v).replace("–", "-");
+    else text = (Array.isArray(v) ? v.join(", ") : String(v)).replace(/[\[\]]/g, "");
+    out.push("[" + text + "]." + key);
+  }
+  return out.join(" ");
+}
+
+// Compact "MA·LEC·2·3" used in admin lists.
+export function shortMeta(meta, registry = SEARCH_FIELDS) {
+  if (!meta) return "";
+  return sortMetaKeys(Object.keys(meta), registry).map((key) => {
+    const v = meta[key];
+    if (v == null || v === "") return "";
+    if (Array.isArray(v)) { const def = ownDef(registry, key); return def && def.kind === "number" ? v[0] + "-" + v[v.length - 1] : v.join("/"); }
+    return String(v);
+  }).filter((x) => x !== "").join("·");
+}
+
+// ----------------------------------------------------------------------------
+// 9. Admin syntax parser:   [MA].s [Lec].t [2].n [3].l [Dr Ahmed].doctor     (any subset, any order)
+//    Grammar is generic: [value].field. Registered fields use their own parser (strict: unknown
+//    subjects/types are rejected so bad data never gets stored); UNREGISTERED fields are accepted as
+//    text and reported as a warning, never dropped.
+// ----------------------------------------------------------------------------
+export function parseNumberSpec(raw) {
   const norm = String(raw == null ? "" : raw)
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
     .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
@@ -268,8 +561,8 @@ export function parseNumberSpec(raw, max = MAX_NUMBER) {
   for (const part of norm.split(",")) {
     if (!part) continue;
     let m;
-    if ((m = /^(\d{1,6})$/.exec(part))) out.push(Number(m[1]));
-    else if ((m = /^(\d{1,6})-(\d{1,6})$/.exec(part))) {
+    if ((m = /^(\d{1,4})$/.exec(part))) out.push(Number(m[1]));
+    else if ((m = /^(\d{1,4})-(\d{1,4})$/.exec(part))) {
       const a = Number(m[1]), b = Number(m[2]);
       if (b < a) return { ok: false, error: `bad range "${part}" (the end is smaller than the start)` };
       if (b - a + 1 > MAX_RANGE_ITEMS) return { ok: false, error: `range "${part}" is too long (max ${MAX_RANGE_ITEMS} numbers)` };
@@ -277,446 +570,312 @@ export function parseNumberSpec(raw, max = MAX_NUMBER) {
     } else return { ok: false, error: `"${part}" is not a number (use 2, 1-3 or 1,2,5)` };
   }
   if (out.length > MAX_RANGE_ITEMS) return { ok: false, error: `too many numbers (max ${MAX_RANGE_ITEMS})` };
-  if (out.some((x) => x > max)) return { ok: false, error: `numbers must be between 0 and ${max}` };
-  const n = canonNumbers(out, max);
+  if (out.some((x) => x > MAX_NUMBER)) return { ok: false, error: `numbers must be between 0 and ${MAX_NUMBER}` };
+  const n = canonNumbers(out);
   return n == null ? { ok: false, error: "no valid number found" } : { ok: true, n };
 }
 
-const cleanText = (v) => String(v).replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
+function resolveUnique(map, value, what) {
+  const key = normalizeText(value);
+  if (!key) return { ok: false, error: `the ${what} is empty` };
+  const codes = map && map.get(key);
+  if (!codes || !codes.size) return { ok: false, error: `unknown ${what} "${String(value).trim()}"` };
+  if (codes.size > 1) return { ok: false, error: `"${String(value).trim()}" matches several ${what}s (${[...codes].join(", ")}) — use the exact code` };
+  return { ok: true, code: [...codes][0] };
+}
 
-// One value -> canonical stored form (number | CODE | string). null = unusable.
-function normalizeScalar(c, key, value) {
-  if (value == null) return null;
-  const kind = kindOf(c, key);
+// raw text of ONE tag -> { ok, value } | { ok:false, error }.  Registry-driven; no field names here.
+function parseFieldValue(key, def, raw, lk, ctx) {
+  if (def && typeof def.parse === "function") {
+    const r = def.parse(raw, ctx);
+    return r && r.ok ? { ok: true, value: r.value } : { ok: false, error: (r && r.error) || `bad value for ".${key}"` };
+  }
+  const kind = def ? def.kind : "text";
+  const what = def && def.label ? def.label.toLowerCase() : key;
   if (kind === "number") {
-    if (typeof value === "number") return canonNumbers(value, maxOf(c, key));
-    const r = parseNumberSpec(value, maxOf(c, key));
-    return r.ok ? r.n : null;
+    const r = parseNumberSpec(raw);
+    if (!r.ok) return r;
+    if (!def.multi && Array.isArray(r.n)) return { ok: false, error: `".${key}" takes a single number, not a range or list` };
+    return { ok: true, value: r.n };
   }
-  const str = cleanText(value);
-  if (!str) return null;
-  if (kind === "enum") {
-    const hit = c.enums[key].get(normalizeText(str));
-    if (hit && hit.size === 1) return [...hit][0];
-    return /^[A-Za-z0-9_]{1,24}$/.test(str) ? str.toUpperCase() : null;      // keep codes even if the dictionary dropped them
-  }
-  return str;                                                                  // text / unknown field: keep as written
-}
-
-export function normalizeFieldValue(key, value, cfgIn) {
-  const c = compile(cfgIn);
-  if (Array.isArray(value)) {
-    if (kindOf(c, key) === "number") return canonNumbers(value.map((x) => (typeof x === "number" ? x : Number(x))), maxOf(c, key));
-    const out = [...new Set(value.map((x) => normalizeScalar(c, key, x)).filter((x) => x != null))].slice(0, MAX_RANGE_ITEMS);
-    return out.length ? (out.length === 1 ? out[0] : out) : null;
-  }
-  return normalizeScalar(c, key, value);
-}
-
-// Generic: keeps EVERY key, normalizes each value through the registry. Returns null when nothing is left.
-export function normalizeSearchMeta(meta, cfgIn) {
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
-  const out = {};
-  let count = 0;
-  for (const [rawKey, value] of Object.entries(meta)) {
-    const key = String(rawKey).toLowerCase();
-    if (!/^[a-z][a-z0-9_]{0,23}$/.test(key)) continue;
-    const v = normalizeFieldValue(key, value, cfgIn);
-    if (v == null) continue;
-    out[key] = v;
-    if (++count >= MAX_FIELDS_PER_ITEM) break;
-  }
-  return count ? out : null;
-}
-
-// Registry order first, then any other keys alphabetically => stable text for diffs / storage.
-function orderedKeys(c, meta) {
-  const known = c.keys.filter((k) => meta[k] != null);
-  const rest = Object.keys(meta).filter((k) => !c.keys.includes(k)).sort();
-  return [...known, ...rest];
-}
-export function serializeSearchMeta(meta, cfgIn) {
-  const m = normalizeSearchMeta(meta, cfgIn);
-  if (!m) return null;
-  const c = compile(cfgIn), o = {};
-  for (const k of orderedKeys(c, m)) o[k] = m[k];
-  return JSON.stringify(o);
-}
-
-export function formatNumbers(n) {
-  const a = asArray(n);
-  if (!a.length) return "";
-  if (a.length === 1) return String(a[0]);
-  const contiguous = a.every((x, i) => i === 0 || x === a[i - 1] + 1);
-  return contiguous ? a[0] + "–" + a[a.length - 1] : a.join(", ");
-}
-
-// mode: "value" | "plural" | "chip"
-export function formatValue(key, value, mode = "value", cfgIn) {
-  const c = compile(cfgIn);
-  const f = c.cfg.fields[key];
-  if (kindOf(c, key) === "enum") {
-    const e = c.cfg.dict[f.dictionary] && c.cfg.dict[f.dictionary][value];
-    if (!e) return String(value);
-    const label = e.label || e.name || String(value);
-    return mode === "plural" ? (e.plural || label) : label;
-  }
-  return String(value);
-}
-function formatValues(c, key, values, mode) {
-  const vals = asArray(values);
-  if (!vals.length) return "";
-  let s;
-  if (kindOf(c, key) === "number") s = formatNumbers(vals.map(Number).sort((a, b) => a - b));
-  else s = vals.map((v) => formatValue(key, v, mode, c.cfg)).join(" / ");
-  const f = c.cfg.fields[key];
-  return mode === "chip" && f && f.chip ? f.chip.replace("{{v}}", s) : s;
-}
-
-// "Subject: MA (Managerial Accounting) · Type: LEC (Lecture) · Number: 2"  (admin confirmations)
-export function describeMeta(meta, cfgIn) {
-  const m = normalizeSearchMeta(meta, cfgIn);
-  if (!m) return "—";
-  const c = compile(cfgIn);
-  return orderedKeys(c, m).map((k) => {
-    const v = m[k];
-    let shown;
-    if (kindOf(c, k) === "enum") shown = asArray(v).map((x) => { const l = formatValue(k, x, "value", c.cfg); return l !== String(x) ? `${x} (${l})` : String(x); }).join(", ");
-    else if (kindOf(c, k) === "number") shown = formatNumbers(v);
-    else shown = asArray(v).join(", ");
-    return `${labelOfField(c, k)}: ${shown}`;
-  }).join(" · ");
-}
-
-// Short form for lists: "MA·LEC·2"
-export function shortMeta(meta, cfgIn) {
-  const m = normalizeSearchMeta(meta, cfgIn);
-  if (!m) return "";
-  const c = compile(cfgIn);
-  return orderedKeys(c, m).map((k) => (kindOf(c, k) === "number" ? formatNumbers(m[k]).replace("–", "-") : asArray(m[k]).join("/"))).join("·");
-}
-
-// Canonical admin syntax: "[MA].s [LEC].t [2].n"
-export function metaToSyntax(meta, cfgIn) {
-  const m = normalizeSearchMeta(meta, cfgIn);
-  if (!m) return "";
-  const c = compile(cfgIn);
-  return orderedKeys(c, m).map((k) => {
-    const v = m[k];
-    const text = kindOf(c, k) === "number" ? formatNumbers(v).replace("–", "-").replace(/, /g, ",") : asArray(v).join(",");
-    return "[" + text.replace(/[\[\]]/g, "") + "]." + k;
-  }).join(" ");
-}
-
-// Derive fields from the folder tree (e.g. "Level 3" > "Semester 1" => l:3, sem:1). Nearest ancestor wins.
-export function deriveFromPath(names, cfgIn) {
-  const c = compile(cfgIn);
-  const list = asArray(names).map(normalizeText);
-  const out = {};
-  for (const key of Object.keys(c.fromPath)) {
-    for (let i = list.length - 1; i >= 0; i--) {
-      const m = c.fromPath[key].exec(list[i]);
-      if (m) { out[key] = kindOf(c, key) === "number" ? Number(m[1]) : m[1]; break; }
-    }
-  }
-  return out;
-}
-
-// ----------------------------------------------------------------------------
-// 7. Admin syntax parser — generic grammar:  [value].field  (any field, any order, any subset)
-// ----------------------------------------------------------------------------
-export function resolveFieldKey(tag, cfgIn) {
-  const c = compile(cfgIn);
-  const t = String(tag).toLowerCase();
-  if (c.cfg.fields[t]) return t;
-  const w = c.words.get(normalizeText(t));
-  return w || t;
-}
-
-function parseFieldValue(c, key, raw) {
-  const label = labelOfField(c, key).toLowerCase();
-  const kind = kindOf(c, key);
-  if (kind === "number") {
-    const r = parseNumberSpec(raw, maxOf(c, key));
-    return r.ok ? { ok: true, value: r.n } : { ok: false, error: `${label}: ${r.error}` };
+  if (kind === "enum" && lk.alias.has(key)) {
+    const r = resolveUnique(lk.alias.get(key), raw, what);
+    return r.ok ? { ok: true, value: r.code } : r;
   }
   if (kind === "enum") {
-    const norm = normalizeText(raw);
-    if (!norm) return { ok: false, error: `the ${label} is empty` };
-    const codes = c.enums[key].get(norm);
-    if (!codes || !codes.size) return { ok: false, error: `unknown ${label} "${String(raw).trim()}"` };
-    if (codes.size > 1) return { ok: false, error: `"${String(raw).trim()}" matches several ${label}s (${[...codes].join(", ")}) — use the exact code` };
-    return { ok: true, value: [...codes][0] };
+    const s = String(raw == null ? "" : raw).trim();
+    return isCode(s) ? { ok: true, value: s.toUpperCase() } : { ok: false, error: `the ${what} must be a short code (letters/digits), got "${s.slice(0, 20)}"` };
   }
-  const v = cleanText(raw);
-  return v ? { ok: true, value: v } : { ok: false, error: `the ${label} is empty` };
+  const v = cleanText(String(raw == null ? "" : raw));
+  return v === undefined ? { ok: false, error: `the value of ".${key}" is empty` } : { ok: true, value: v };
 }
 
-export function parseAdminSyntax(text, cfgIn) {
-  const c = compile(cfgIn);
+export function parseAdminSyntax(text, dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
   const src = String(text == null ? "" : text).trim();
   if (!src) return { ok: false, error: "empty" };
+  const lk = buildLookup(dict, registry);
   const re = /\[([^\]]*)\]\s*\.\s*([A-Za-z][A-Za-z0-9_]*)/g;
-  const meta = {}, warnings = [], seen = new Set();
+  const meta = {};
+  const warnings = [];
   let m, rest = src;
+  const seen = new Set();
   while ((m = re.exec(src))) {
     rest = rest.replace(m[0], " ");
-    const key = resolveFieldKey(m[2], c.cfg);
-    if (!/^[a-z][a-z0-9_]{0,23}$/.test(key)) return { ok: false, error: `bad field name ".${m[2]}"` };
+    const tag = m[2].toLowerCase();
+    const known = lk.tagNames.get(tag) || null;
+    const key = known || tag;
+    if (!known && !FIELD_KEY_RE.test(tag)) return { ok: false, error: `bad tag ".${m[2].slice(0, 30)}" (use letters/digits, max 24)` };
     if (seen.has(key)) return { ok: false, error: `the tag ".${key}" appears twice` };
     seen.add(key);
-    if (!c.cfg.fields[key]) warnings.push(`Unknown field ".${key}" — stored as custom metadata.`);
-    const r = parseFieldValue(c, key, m[1]);
+    const r = parseFieldValue(key, known ? registry[known] : null, m[1], lk, { field: key, registry, dict });
     if (!r.ok) return r;
     meta[key] = r.value;
+    if (!known) warnings.push(`Unknown field ".${tag}" — stored as custom metadata.`);
   }
-  if (rest.replace(/\s+/g, "")) return { ok: false, error: `unexpected text "${rest.trim().slice(0, 40)}" — write every part as [value].field` };
+  if (rest.replace(/\s+/g, "")) return { ok: false, error: `unexpected text "${rest.trim().slice(0, 40)}" — write every part as [value].tag` };
   if (!Object.keys(meta).length) return { ok: false, error: "no field found" };
   return { ok: true, meta, warnings };
 }
 
-// Admin input = the admin syntax, OR (convenience) plain words like "ma lec 2" / "schedule level 3"
-// as long as every word is known (strict: unknown/ambiguous words are rejected, never guessed).
-export function parseAdminSearchInput(text, cfgIn) {
-  const c = compile(cfgIn);
+// Admin input = the admin syntax, OR (convenience) plain words like "ma lec 2" as long as every
+// word is a known alias (strict: unknown/ambiguous words are rejected, never guessed).
+export function parseAdminSearchInput(text, dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
   const src = String(text == null ? "" : text).trim();
   if (!src) return { ok: false, error: "empty" };
   if (src.includes("[")) {
-    const r = parseAdminSyntax(src, c.cfg);
-    if (!r.ok) return r;
-    const meta = normalizeSearchMeta(r.meta, c.cfg);
-    return meta ? { ok: true, meta, name: src.slice(0, 120), warnings: r.warnings } : { ok: false, error: "no usable value" };
+    const r = parseAdminSyntax(src, dict, registry);
+    return r.ok ? { ok: true, meta: normalizeSearchMeta(r.meta, { dict, registry }), name: src.slice(0, 120), warnings: r.warnings } : r;
   }
-  const q = parseQuery(src + " ", { cfg: c.cfg, typing: false });
+  const q = parseQuery(src + " ", { dict, registry });     // trailing space = "no word is being typed" => no prefix guessing
   if (q.text.length) return { ok: false, error: `unknown word "${q.text[0]}" — use the codes or the [MA].s [Lec].t [2].n format` };
   const meta = {};
-  for (const [key, set] of Object.entries(q.fields)) {
+  for (const [field, set] of Object.entries(q.fields)) {
+    const def = ownDef(registry, field);
     if (set.size > 1) {
-      return { ok: false, error: kindOf(c, key) === "number"
-        ? "write several numbers as a range, e.g. [1-3].n"
-        : `the ${labelOfField(c, key).toLowerCase()} is ambiguous (${[...set].join(", ")}) — use the exact code` };
+      if (def && def.kind === "number") return { ok: false, error: `write several numbers as a range, e.g. [1-3].${field}` };
+      return { ok: false, error: `the ${(def && def.label ? def.label : field).toLowerCase()} is ambiguous (${[...set].join(", ")}) — use the exact code` };
     }
-    meta[key] = [...set][0];
+    meta[field] = [...set][0];
   }
-  const clean = normalizeSearchMeta(meta, c.cfg);
+  const clean = normalizeSearchMeta(meta, { dict, registry });
   if (!clean) return { ok: false, error: "nothing recognized — use the codes or the [MA].s [Lec].t [2].n format" };
   return { ok: true, meta: clean, name: src.slice(0, 120), warnings: [] };
 }
 
-// Text listing the valid codes (shown by the bot when the admin asks for help). Generated from the config.
-export function codesHelpText(cfgIn) {
-  const c = compile(cfgIn);
+// Text listing the valid codes (shown by the bot when the admin asks for help). Generated from the registry.
+export function codesHelpText(dict = SEARCH_DICTIONARY, registry = SEARCH_FIELDS) {
+  const lk = buildLookup(dict, registry);
   const blocks = [];
-  for (const key of c.keys) {
-    const f = c.cfg.fields[key];
-    if (kindOf(c, key) === "enum") {
-      const entries = c.cfg.dict[f.dictionary];
-      blocks.push(`${f.label} (.${key}):\n` + Object.entries(entries).map(([code, e]) => `${code} — ${e.label || e.name || code}`).join("\n"));
-    } else {
-      blocks.push(`${f.label} (.${key}) — ${kindOf(c, key) === "number" ? "a number, or a range like 1-3" : "free text"}`);
-    }
+  for (const key of lk.enumKeys) {
+    const def = registry[key], entries = dict[def.dictionary];
+    blocks.push(`${def.label}s (.${key}):\n` + Object.entries(entries).map(([c, v]) => `${c} — ${v.label || v.name || c}`).join("\n"));
   }
-  blocks.push("Any other field is stored as custom text, e.g. [2026].year");
+  const others = Object.keys(registry).filter((k) => !lk.alias.has(k))
+    .map((k) => `.${k} — ${registry[k].label || k} (${registry[k].kind})${registry[k].aliases && registry[k].aliases.length ? ", also ." + registry[k].aliases.join(" .") : ""}`);
+  if (others.length) blocks.push("Other fields:\n" + others.join("\n"));
+  blocks.push("Any other [value].name is accepted and stored as custom metadata.");
   return blocks.join("\n\n");
 }
 
 // ----------------------------------------------------------------------------
-// 8. Natural user query parser
-//    "managerial accounting lec 2"  ->  fields: { s:{MA}, t:{LEC}, n:{2} }
-//    "schedule level 3 sem 1 final" ->  fields: { t:{SCHEDULE}, l:{3}, sem:{1}, v:{FINAL} }
-//    Missing field = ANY.  Also understood: explicit  field:value  (e.g. year:2026, n:1-3).
-//    The word still being typed (query does not end with a space) may be a PREFIX of a known alias.
-//    Nothing else is guessed: unknown words stay plain text filters.
+// 10. Natural user query parser
+//    "managerial accounting lec 2"  ->  { fields: { s:{MA}, t:{LEC}, n:{2} }, text: [] }
+//    "schedule level 3 sem 1 final" ->  { fields: { t:{SCHEDULE}, l:{3}, sem:{1}, v:{FINAL} } }
+//    Missing field = ANY.  Everything comes from the registry + dictionaries:
+//      * a dictionary alias ("ma", "lec", "final")      -> its enum field
+//      * "<field word> <value>" ("level 3", "sem 1")    -> that field
+//      * a bare number                                  -> the field registered with bare:true
+//    An alias shared by several fields is resolved from context (the field the query has not
+//    filled yet). The word still being typed (query does not end with a space) may be a PREFIX of
+//    an alias, so "m" / "ma l" / "cost a" progressively narrow. Nothing else is guessed.
 // ----------------------------------------------------------------------------
 export function parseQuery(raw, opts = {}) {
-  const c = compile(opts.cfg || opts.dict);
-  const cfg = c.cfg;
-  let rawStr = String(raw == null ? "" : raw);
-  const typing = opts.typing != null ? !!opts.typing : !/\s$/.test(rawStr);
-  const q = { fields: {}, text: [], partial: false, recognized: false, empty: false, norm: "" };
-  const add = (key, vals) => {
-    const set = q.fields[key] || (q.fields[key] = new Set());
-    for (const v of vals) set.add(v);
-    q.recognized = true;
-  };
-
-  // explicit  field:value  (any field, registered or not)
-  rawStr = rawStr.replace(/(^|\s)([A-Za-z][A-Za-z0-9_]{0,23}):(\S+)/g, (all, pre, rk, val) => {
-    if (/^(https?|ftp|tg)$/i.test(rk)) return all;
-    const key = resolveFieldKey(rk, cfg);
-    const kind = kindOf(c, key);
-    let vals = null;
-    if (kind === "number") { const r = parseNumberSpec(val, maxOf(c, key)); if (r.ok) vals = asArray(r.n); }
-    else if (kind === "enum") { const hit = c.enums[key].get(normalizeText(val)); if (hit) vals = [...hit]; }
-    else { const nv = normalizeText(val); if (nv) vals = [nv]; }
-    if (!vals) return all;
-    add(key, vals);
-    return pre;
-  });
-
+  const dict = opts.dict || SEARCH_DICTIONARY, registry = opts.registry || SEARCH_FIELDS;
+  const lk = buildLookup(dict, registry);
+  const rawStr = String(raw == null ? "" : raw);
   const norm = normalizeText(rawStr);
-  q.norm = norm;
   const tokens = tokensOf(norm);
-  q.empty = !tokens.length && !q.recognized;
+  const typing = opts.typing != null ? !!opts.typing : !/\s$/.test(rawStr);   // is the last word still being typed?
+  const q = { fields: {}, text: [], partial: false, recognized: false, empty: !tokens.length, norm };
 
-  // first field (registry order) that is still unconstrained and has an alias starting with `phrase`
-  const prefixHit = (phrase) => {
-    for (const key of c.keys) {
-      if (q.fields[key] || !c.aliasLists[key]) continue;
-      const out = new Set();
-      for (const [alias, codes] of c.aliasLists[key]) if (alias.startsWith(phrase)) for (const code of codes) out.add(code);
-      if (out.size) return [key, out];
+  const direct = [];      // unambiguous: { field, values }
+  const picks = [];       // dictionary hits: { cands:[{field, codes}], prefix, tokens }
+
+  const prefixCands = (phrase) => {
+    const out = [];
+    for (const key of lk.enumKeys) {
+      const codes = new Set();
+      for (const [alias, cs] of lk.aliasList.get(key)) if (alias === phrase || alias.startsWith(phrase)) for (const c of cs) codes.add(c);
+      if (codes.size) out.push({ field: key, codes });
     }
-    return null;
+    return out;
+  };
+  const exactCands = (phrase) => {
+    const out = [];
+    for (const key of lk.enumKeys) { const codes = lk.alias.get(key).get(phrase); if (codes) out.push({ field: key, codes }); }
+    return out;
   };
 
-  const pendings = [];                  // phrases that belong to several fields: resolved after the scan
+  // "<field word> <value>" for any registered field; null unless a valid value follows
+  const fieldWordValue = (i) => {
+    const key = lk.fieldWords.get(tokens[i]);
+    if (!key || i + 1 >= tokens.length) return null;
+    const def = registry[key], nxt = tokens[i + 1];
+    if (def.kind === "number") return /^\d+$/.test(nxt) && Number(nxt) <= MAX_NUMBER ? { key, values: [Number(nxt)], used: 2 } : null;
+    if (lk.alias.has(key)) {
+      const map = lk.alias.get(key), remaining = tokens.length - (i + 1);
+      for (let j = Math.min(lk.maxTokens, remaining); j >= 1; j--) {
+        const codes = map.get(tokens.slice(i + 1, i + 1 + j).join(" "));
+        if (codes) return { key, values: [...codes], used: 1 + j };
+      }
+      return null;
+    }
+    if (lk.fieldWords.has(nxt) || lk.fillers.has(nxt)) return null;
+    const a = atomOf(def, nxt);
+    return a == null ? null : { key, values: [a], used: 2 };
+  };
+
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
-    const remaining = tokens.length - i;
-    const atTail = typing && remaining <= c.maxTokens;
 
-    // (1) field word followed by its value:  "level 3"  "sem 1"  "doctor ahmed"  "variant final"
-    const wk = c.words.get(tok);
-    if (wk && i + 1 < tokens.length) {
-      const next = tokens[i + 1], kind = kindOf(c, wk);
-      if (kind === "number" && /^\d+$/.test(next) && Number(next) <= maxOf(c, wk)) { add(wk, [Number(next)]); i += 2; continue; }
-      if (kind === "enum") {
-        let hit = null;
-        for (let j = Math.min(c.maxTokens, tokens.length - i - 1); j >= 1 && !hit; j--) {
-          const codes = c.enums[wk].get(tokens.slice(i + 1, i + 1 + j).join(" "));
-          if (codes) hit = { codes, j };
-        }
-        if (hit) { add(wk, hit.codes); i += 1 + hit.j; continue; }
-      }
-      if (kind === "text") { add(wk, [next]); i += 2; continue; }
-    }
-
-    // (2) bare number -> the field configured with bare:true
+    // bare number -> the field configured with bare:true (otherwise plain text)
     if (/^\d+$/.test(tok)) {
-      if (c.bare && Number(tok) <= maxOf(c, c.bare)) add(c.bare, [Number(tok)]); else q.text.push(tok);
+      const v = Number(tok);
+      if (lk.bareField && v <= MAX_NUMBER) direct.push({ field: lk.bareField, values: [v] }); else q.text.push(tok);
       i++; continue;
     }
 
-    // (3) multi-word phrase still being typed: "managerial a" -> prefix of "managerial acc"
-    if (atTail && remaining >= 2 && !c.phrases.has(tokens.slice(i).join(" "))) {
-      const hit = prefixHit(tokens.slice(i).join(" "));
-      if (hit) { add(hit[0], hit[1]); q.partial = true; i = tokens.length; continue; }
+    const remaining = tokens.length - i;
+    const atTail = typing && remaining <= lk.maxTokens;
+
+    // explicit field word + value
+    const fw = fieldWordValue(i);
+    if (fw) { direct.push({ field: fw.key, values: fw.values }); i += fw.used; continue; }
+
+    // (a) multi-word phrase still being typed: "managerial a" -> prefix of "managerial acc"
+    if (atTail && remaining >= 2) {
+      const phrase = tokens.slice(i).join(" ");
+      if (!exactCands(phrase).length) {
+        const cands = prefixCands(phrase);
+        if (cands.length) { picks.push({ cands, prefix: true, tokens: tokens.slice(i) }); i = tokens.length; continue; }
+      }
     }
 
-    // (4) longest exact alias starting here
+    // (b) longest exact alias starting here (any enum field)
     let matched = false;
-    for (let j = Math.min(c.maxTokens, remaining); j >= 1; j--) {
-      const cands = c.phrases.get(tokens.slice(i, i + j).join(" "));
-      if (!cands) continue;
-      if (cands.length === 1) add(cands[0].field, cands[0].codes); else pendings.push(cands);
-      i += j; matched = true; break;
+    for (let j = Math.min(lk.maxTokens, remaining); j >= 1; j--) {
+      const cands = exactCands(tokens.slice(i, i + j).join(" "));
+      if (cands.length) { picks.push({ cands, prefix: false }); i += j; matched = true; break; }
     }
     if (matched) continue;
 
-    // (5) filler words are ignored
-    if (c.fillers.has(tok)) { i++; continue; }
+    // (c) filler words are ignored
+    if (lk.fillers.has(tok)) { i++; continue; }
 
-    // (6) the last word, still being typed: prefix of a known alias
+    // (d) last word still being typed: single-token prefix
     if (atTail && remaining === 1) {
-      const hit = prefixHit(tok);
-      if (hit) { add(hit[0], hit[1]); q.partial = true; i++; continue; }
+      const cands = prefixCands(tok);
+      if (cands.length) { picks.push({ cands, prefix: true, tokens: [tok] }); i++; continue; }
+      // a field word typed but not yet followed by its value ("schedule level") constrains nothing yet
+      if (lk.fieldWords.has(tok)) { i++; continue; }
     }
 
-    // (7) a field word with no usable value ("ma level") carries no filter: ignore it
-    if (wk) { i++; continue; }
-    if (atTail && remaining === 1 && tok.length >= 2) {                 // "lev" typed on the way to "level 3"
-      let isWordPrefix = false;
-      for (const w of c.words.keys()) if (w.startsWith(tok)) { isWordPrefix = true; break; }
-      if (isWordPrefix) { i++; q.partial = true; continue; }
-    }
-
-    // (8) unknown word: kept as a plain text filter, never mapped to a field
+    // (e) unknown word: kept as a plain text filter, never mapped to a field
     q.text.push(tok);
     i++;
   }
 
-  // phrases that fit several fields ("sections" = type SEC or variant SECTIONS): the first field the
-  // user has not already constrained wins, so "schedule sections" -> variant, "ma sections" -> type.
-  for (const cands of pendings) {
-    const pick = cands.find((x) => !q.fields[x.field]) || cands[0];
-    add(pick.field, pick.codes);
+  const add = (field, vals) => {
+    const set = q.fields[field] || (q.fields[field] = new Set());
+    for (const v of vals) set.add(v);
+    q.recognized = true;
+  };
+  for (const d of direct) add(d.field, d.values);
+  for (const p of picks) if (!p.prefix && p.cands.length === 1) add(p.cands[0].field, p.cands[0].codes);
+  for (const p of picks) if (!p.prefix && p.cands.length > 1) { const c = p.cands.find((x) => !q.fields[x.field]) || p.cands[0]; add(c.field, c.codes); }
+  for (const p of picks) if (p.prefix) {
+    const c = p.cands.find((x) => !q.fields[x.field]);
+    if (c) { add(c.field, c.codes); q.partial = true; } else q.text.push(...p.tokens);
   }
   return q;
 }
 
-// ----------------------------------------------------------------------------
-// 9. Entries, constraints, matching (generic: iterates the query's keys)
-// ----------------------------------------------------------------------------
-function comparable(c, key, value) {
-  const kind = kindOf(c, key);
-  const vals = asArray(value);
-  if (kind === "number") return vals.map(Number);
-  if (kind === "enum") return vals.map((v) => String(v).toUpperCase());
-  return vals.map((v) => normalizeText(v));
+// A query built from plain values:  makeQuery({ s: "MA", n: [2, 3], l: 3 })
+export function makeQuery(obj = {}, opts = {}) {
+  const registry = opts.registry || SEARCH_FIELDS;
+  const q = { fields: {}, text: [], partial: false, recognized: false, empty: true, norm: "" };
+  for (const [field, value] of Object.entries(obj || {})) {
+    const atoms = atomsOf(field, value, { registry });
+    if (!atoms.length) continue;
+    q.fields[field] = new Set(atoms);
+    q.recognized = true; q.empty = false;
+  }
+  return q;
 }
 
-// meta -> entry with precomputed comparable values (built once per item, queried many times)
-export function makeEntry(base, meta, cfgIn) {
-  const c = compile(cfgIn);
-  const m = meta || {};
-  const norm = {};
-  for (const key of Object.keys(m)) norm[key] = comparable(c, key, m[key]);
-  return { ...base, meta: m, norm };
-}
-
-// the expected-set a UI value (filter selection) stands for
-export function expectedFor(key, value, cfgIn) {
-  const c = compile(cfgIn);
-  return new Set(comparable(c, key, value));
-}
-
-// every field in `a` and in `b` is a constraint; a field in both = intersection
-export function mergeConstraints(a, b) {
+// Search + filters: every constraint applies (AND). Same field in both -> intersection; for
+// free-text fields the explicit filter selection wins (a phrase can't be intersected with a phrase).
+export function combineConstraints(a = {}, b = {}, opts = {}) {
+  const registry = opts.registry || SEARCH_FIELDS;
   const out = {};
-  for (const src of [a || {}, b || {}]) {
-    for (const [key, set] of Object.entries(src)) {
-      if (!out[key]) out[key] = new Set(set);
-      else out[key] = new Set([...out[key]].filter((x) => set.has(x)));
-    }
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const x = a[k], y = b[k], def = ownDef(registry, k);
+    if (x && y) out[k] = !def || def.kind === "text" ? new Set(y) : new Set([...x].filter((v) => y.has(v)));
+    else out[k] = new Set(x || y);
   }
   return out;
 }
-
-export function filtersToConstraints(filters, cfgIn) {
-  const out = {};
-  for (const [key, value] of Object.entries(filters || {})) if (value != null && value !== "") out[key] = expectedFor(key, value, cfgIn);
-  return out;
+export function withFilters(q, filters, opts = {}) {
+  const keys = Object.keys(filters || {}).filter((k) => filters[k] && filters[k].size);
+  if (!keys.length) return q;
+  const picked = {};
+  for (const k of keys) picked[k] = filters[k];
+  return { ...q, fields: combineConstraints(q.fields, picked, opts), recognized: true, empty: false };
 }
 
-// What the engine really filters by: the query's fields, where a CHOSEN filter wins for the same field
-// ("ma" + Subject filter FM => FM). Fields neither mentions stay ANY.
-export function effectiveConstraints(queryFields, filters, cfgIn) {
-  return { ...(queryFields || {}), ...filtersToConstraints(filters, cfgIn) };
-}
+// ----------------------------------------------------------------------------
+// 11. Matching.  entry = { search_meta, atoms?, hay }  (see makeEntry)
+//     Every field present in the query is a constraint; fields absent from the query are ANY.
+// ----------------------------------------------------------------------------
+const containsPhrase = (haystack, phrase) => (" " + haystack + " ").includes(" " + phrase + " ");
 
-function matchField(itemVals, expected, kind) {
-  if (!itemVals || !itemVals.length) return false;                      // a constrained field the item lacks => no match
-  if (kind === "text") {
-    for (const want of expected) for (const have of itemVals) if (have === want || (" " + have + " ").includes(" " + want + " ")) return true;
-    return false;
+function matchAtoms(act, exp, textual) {
+  if (!act || !act.length) return false;
+  for (const a of act) {
+    if (exp.has(a)) return true;
+    if (textual && typeof a === "string") for (const x of exp) if (typeof x === "string" && containsPhrase(a, x)) return true;
   }
-  for (const v of itemVals) if (expected.has(v)) return true;
   return false;
 }
 
-// Rule: every field present in the query is a constraint; absent fields are ANY.
-export function matchFields(e, fields, cfgIn) {
-  const c = compile(cfgIn);
-  for (const key of Object.keys(fields || {})) {
-    if (!matchField(e.norm && e.norm[key], fields[key], kindOf(c, key))) return false;
-  }
-  return true;
+// actual = raw metadata value (scalar or array); expected = Set / array / scalar of atoms
+export function matchesField(actual, expected, def = null) {
+  if (expected == null) return true;
+  const exp = expected instanceof Set ? expected : new Set(Array.isArray(expected) ? expected : [expected]);
+  const act = Array.isArray(actual) ? actual : (actual == null ? [] : [actual]);
+  const atoms = act.map((x) => atomOf(def, x)).filter((x) => x != null);
+  const want = new Set([...exp].map((x) => atomOf(def, x)).filter((x) => x != null));
+  return matchAtoms(atoms, want, !def || def.kind === "text");
 }
 
-export function matchEntry(e, q, cfgIn) {
-  if (!matchFields(e, q.fields, cfgIn)) return false;
+// Entry for the local index; atoms are computed ONCE here, never per keystroke.
+export function makeEntry(meta, extra = {}, opts = {}) {
+  const sm = normalizeSearchMeta(meta, opts);
+  if (!sm) return null;
+  const atoms = {};
+  for (const k of Object.keys(sm)) atoms[k] = atomsOf(k, sm[k], opts);
+  return { ...extra, search_meta: sm, atoms };
+}
+
+export function matchEntry(e, q, opts = {}) {
+  const registry = opts.registry || SEARCH_FIELDS;
+  for (const [field, expected] of Object.entries(q.fields || {})) {
+    if (!expected) continue;
+    const act = e.atoms ? (e.atoms[field] || []) : atomsOf(field, e.search_meta && e.search_meta[field], { registry });
+    const def = ownDef(registry, field);
+    if (!matchAtoms(act, expected, !def || def.kind === "text")) return false;
+  }
   if (q.text && q.text.length) {
     const hay = e.hay || "";
     for (const w of q.text) if (!hay.includes(w)) return false;
@@ -725,230 +884,249 @@ export function matchEntry(e, q, cfgIn) {
 }
 
 // ----------------------------------------------------------------------------
-// 10. Dynamic filters — fields and values discovered from the registry + the loaded data.
-//     Dependent chain (by filterOrder):  each dropdown lists only values that exist in the dataset
-//     left by the query's other constraints and by the filters chosen BEFORE it.
+// 12. Result engine (pure functions; the Mini App supplies the entries). Configured by SEARCH_VIEW.
 // ----------------------------------------------------------------------------
-export function filterFieldOrder(entries, cfgIn) {
-  const c = compile(cfgIn);
-  const registered = c.keys.filter((k) => c.cfg.fields[k].filter !== false)
-    .map((k, i) => ({ k, o: c.cfg.fields[k].filterOrder != null ? c.cfg.fields[k].filterOrder : 100 + i }))
-    .sort((a, b) => a.o - b.o).map((x) => x.k);
-  const seen = new Set(registered);
-  const found = new Set();
-  for (const e of entries) for (const k of Object.keys(e.meta || {})) if (!seen.has(k)) found.add(k);
-  return [...registered, ...[...found].sort()];
+const present = (e, f) => e.atoms ? !!(e.atoms[f] && e.atoms[f].length) : (e.search_meta && e.search_meta[f] != null);
+const atomsFor = (e, f, registry) => (e.atoms ? (e.atoms[f] || []) : atomsOf(f, e.search_meta && e.search_meta[f], { registry }));
+const layoutOf = (e, view) => view.layouts.find((l) => l.when.every((f) => present(e, f))) || view.layouts[view.layouts.length - 1];
+
+function cartesian(lists) {
+  let acc = [[]];
+  for (const l of lists) { const next = []; for (const a of acc) for (const x of l) next.push([...a, x]); acc = next; }
+  return acc;
 }
 
-function optionsFor(pool, key, c) {
-  const kind = kindOf(c, key);
-  const map = new Map();
-  for (const e of pool) {
-    const raw = asArray(e.meta && e.meta[key]), cmp = (e.norm && e.norm[key]) || [];
-    raw.forEach((shown, i) => {
-      const value = cmp[i];
-      if (value == null) return;
-      const hit = map.get(value);
-      if (hit) hit.count++;
-      else map.set(value, { value, label: kind === "enum" ? formatValue(key, shown, "value", c.cfg) : String(shown), count: 1 });
-    });
+function valueRank(field, v, dict, registry) {
+  const def = ownDef(registry, field);
+  if (v == null) return [2, 0, ""];
+  if (typeof v === "number") return [0, v, ""];
+  if (def && def.kind === "enum" && def.dictionary) {
+    const lk = buildLookup(dict, registry);
+    const r = lk.order[field] && lk.order[field][v];
+    if (r != null) return [0, r, ""];
   }
-  const list = [...map.values()];
-  if (kind === "number") list.sort((a, b) => a.value - b.value);
-  else if (kind === "enum") list.sort((a, b) => ((c.orders[key] || {})[a.value] ?? 9999) - ((c.orders[key] || {})[b.value] ?? 9999));
-  else list.sort((a, b) => a.label.localeCompare(b.label));
-  return list;
+  return [1, 0, String(v)];
+}
+function compareRank(a, b) { return a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0); }
+function compareBy(fields, getVal, dict, registry) {
+  return (x, y) => {
+    for (const f of fields) { const c = compareRank(valueRank(f, getVal(x, f), dict, registry), valueRank(f, getVal(y, f), dict, registry)); if (c) return c; }
+    return 0;
+  };
 }
 
-export function buildFilterModel(entries, state = {}, cfgIn) {
-  const c = compile(cfgIn);
-  const order = filterFieldOrder(entries, c.cfg);
-  const queryFields = state.query || {}, filters = state.filters || {};
-  const model = [];
-  order.forEach((key, idx) => {
-    const cons = {};
-    for (const [k, set] of Object.entries(queryFields)) if (k !== key) cons[k] = set;
-    for (const k of order.slice(0, idx)) if (filters[k] != null) cons[k] = expectedFor(k, filters[k], c.cfg);     // a chosen filter overrides what the query said about that field
-    const pool = entries.filter((e) => matchFields(e, cons, c.cfg));
-    const options = optionsFor(pool, key, c);
-    if (!options.length) return;
-    model.push({ key, label: labelOfField(c, key), kind: kindOf(c, key), options, selected: filters[key] != null ? filters[key] : null });
-  });
-  return model;
-}
-
-// Drops selected values that no longer exist after another filter / the query changed.
-export function sanitizeFilters(entries, state = {}, cfgIn) {
-  const c = compile(cfgIn);
-  const order = filterFieldOrder(entries, c.cfg);
-  const queryFields = state.query || {};
-  const out = {};
-  for (const [idx, key] of order.entries()) {
-    const want = (state.filters || {})[key];
-    if (want == null) continue;
-    const cons = {};
-    for (const [k, set] of Object.entries(queryFields)) if (k !== key) cons[k] = set;
-    for (const k of order.slice(0, idx)) if (out[k] != null) cons[k] = expectedFor(k, out[k], c.cfg);
-    const opts = optionsFor(entries.filter((e) => matchFields(e, cons, c.cfg)), key, c);
-    const cmp = comparable(c, key, want)[0];
-    if (opts.some((o) => o.value === cmp)) out[key] = want;
-  }
-  return out;
-}
-
-// ----------------------------------------------------------------------------
-// 11. Results: profiles + templates (no field or value is special-cased here)
-// ----------------------------------------------------------------------------
-function whenMatches(when, meta) {
-  for (const [k, want] of Object.entries(when || {})) {
-    const have = asArray(meta[k]).map(String), wants = asArray(want).map(String);
-    if (!have.some((x) => wants.includes(x))) return false;
-  }
-  return true;
-}
-function profileFor(cfg, meta) {
-  const list = cfg.profiles || [];
-  return list.find((p) => whenMatches(p.when, meta)) || list[list.length - 1];
-}
-
-function renderParts(c, tpl, ctx) {
-  const parts = Array.isArray(tpl) ? tpl : tpl == null ? [] : [tpl];
-  const out = [];
-  for (const part of parts) {
-    let dropped = false;
-    const text = String(part).replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_, exprIn) => {
-      let expr = exprIn, optional = false;
-      if (expr.endsWith("?")) { optional = true; expr = expr.slice(0, -1).trim(); }
-      for (const alt of expr.split("|")) {
-        const a = alt.trim();
-        let val = "";
-        if (/^'.*'$/.test(a) || /^".*"$/.test(a)) val = a.slice(1, -1);
-        else if (a === "anchor") val = ctx.anchor || "";
-        else { const [key, mode] = a.split(":"); val = formatValues(c, key, ctx.get(key), mode || "value"); }
-        if (val) return val;
-      }
-      if (!optional) dropped = true;
-      return "";
-    }).replace(/\s+/g, " ").trim();
-    if (!dropped && text) out.push(text);
-  }
-  return out.join(" · ");
-}
-
-const metaCtx = (meta, over, anchor) => ({
-  anchor,
-  get: (key) => (over && Object.prototype.hasOwnProperty.call(over, key) ? asArray(over[key]) : asArray(meta[key]))
-});
-const queryCtx = (fields) => ({ anchor: "", get: (key) => (fields[key] ? [...fields[key]] : []) });
-
-function anchorKeys(profile, meta, over) {
-  // all value-combinations of the anchor's `by` fields (a field may hold several values, e.g. n:[1,2,3])
-  let combos = [[]];
-  for (const f of profile.anchor.by) {
-    const vals = over && Object.prototype.hasOwnProperty.call(over, f) ? asArray(over[f]) : asArray(meta[f]);
-    if (!vals.length) return [];
-    combos = combos.flatMap((p) => vals.map((v) => [...p, String(v)]));
-  }
-  return combos.map((x) => x.join("|"));
-}
-
-// Which items "own" their siblings (e.g. the lecture a summary belongs to). Built once per dataset.
-export function buildContext(entries, cfgIn) {
-  const cfg = asCfg(cfgIn);
+// Which "anchor" groups exist (e.g. which subject+number pairs contain a Lecture).
+export function buildContext(entries, view = SEARCH_VIEW, registry = SEARCH_FIELDS) {
   const anchors = {};
-  for (const p of cfg.profiles || []) if (p.anchor) anchors[p.id] = new Set();
-  for (const e of entries) {
-    const p = profileFor(cfg, e.meta || {});
-    if (!p || !p.anchor || !whenMatches(p.anchor.where, e.meta || {})) continue;
-    for (const k of anchorKeys(p, e.meta, null)) anchors[p.id].add(k);
+  for (const layout of view.layouts) {
+    if (!layout.anchor) continue;
+    const set = (anchors[layout.id] = new Set());
+    for (const e of entries) {
+      if (layoutOf(e, view) !== layout || !isAnchor(e, layout, registry)) continue;
+      for (const combo of cartesian(layout.anchor.keyBy.map((f) => atomsFor(e, f, registry)))) if (combo.length === layout.anchor.keyBy.length) set.add(combo.join("|"));
+    }
   }
   return { anchors };
 }
-
-function sortValue(c, key, meta) {
-  const v = asArray(meta[key])[0];
-  if (v == null) return Infinity;
-  if (kindOf(c, key) === "number") return Number(v);
-  if (kindOf(c, key) === "enum") return (c.orders[key] || {})[v] ?? 9999;
-  return String(v).toLowerCase();
+function isAnchor(e, layout, registry) {
+  return Object.entries(layout.anchor.where).every(([f, v]) => atomsFor(e, f, registry).includes(v));
 }
-const cmpVals = (a, b) => {
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i], y = b[i];
-    if (x === y) continue;
-    if (typeof x === "string" || typeof y === "string") return String(x).localeCompare(String(y));
-    return x < y ? -1 : 1;
-  }
-  return 0;
-};
 
-// matches -> ordered blocks ready to render.
-//   block = { key, profile, title, suffix, count, showHeadings, groups:[{ key, heading, items:[{ e, title }] }] }
-export function groupResults(matches, q, ctx, cfgIn) {
-  const c = compile(cfgIn);
-  const cfg = c.cfg;
-  const qf = (q && q.fields) || {};
+function titleFor(e, bucket, layout, ctx, dict, registry) {
+  const meta = { ...(e.search_meta || {}), ...bucket };
+  const opts = { dict, registry };
+  const anchorKey = layout.anchor ? layout.anchor.keyBy.map((f) => (bucket[f] != null ? bucket[f] : (atomsFor(e, f, registry)[0]))).join("|") : null;
+  const anchored = !!(layout.anchor && ctx && ctx.anchors && ctx.anchors[layout.id] && ctx.anchors[layout.id].has(anchorKey) && !isAnchor(e, layout, registry));
+  const vars = anchored ? { anchor: renderTemplate(layout.anchor.label, layout.anchor.where, opts) } : {};
+  for (const rule of layout.title) {
+    if (rule.anchored && !anchored) continue;
+    if (rule.when && !rule.when.every((f) => meta[f] != null && meta[f] !== "")) continue;
+    const t = renderTemplate(rule.tpl, meta, { ...opts, vars });
+    if (t) return t;
+  }
+  return describeMeta(e.search_meta, dict, registry);       // nothing configured matches: describe whatever fields it has
+}
+
+function suffixFor(layout, q, dict, registry) {
+  const bits = [];
+  for (const f of layout.suffix || []) {
+    const set = q.fields && q.fields[f];
+    if (!set || !set.size) continue;
+    const def = ownDef(registry, f);
+    if (def && def.kind === "number") {
+      const nums = [...set].filter((x) => typeof x === "number").sort((a, b) => a - b);
+      bits.push((def.format || "{v}").replace("{v}", nums.join(", ")));
+    } else bits.push([...set].map((v) => displayValue(f, v, "plural", { dict, registry })).join(" / "));
+  }
+  return bits.length ? " — " + bits.join(" · ") : "";
+}
+
+// Returns an ordered list of blocks, ready to render.
+//   block = { key, layout, name, suffix, count, showHeadings, groups:[{ key, heading, items:[{ e, bucket, title }] }] }
+export function groupResults(matches, q, ctx, dict = SEARCH_DICTIONARY, view = SEARCH_VIEW, registry = SEARCH_FIELDS) {
   const byBlock = new Map();
   for (const e of matches) {
-    const meta = e.meta || {};
-    const p = profileFor(cfg, meta);
-    const bkey = p.id + "||" + (p.blockBy || []).map((f) => asArray(meta[f]).join(",")).join("|");
-    if (!byBlock.has(bkey)) byBlock.set(bkey, { p, entries: [] });
-    byBlock.get(bkey).entries.push(e);
+    const layout = layoutOf(e, view);
+    const bkey = layout.id + "§" + layout.blockBy.map((f) => atomsFor(e, f, registry).join(",")).join("|");
+    if (!byBlock.has(bkey)) byBlock.set(bkey, { layout, bkey, list: [] });
+    byBlock.get(bkey).list.push(e);
   }
+  const layoutIdx = (l) => view.layouts.indexOf(l);
+  const blockVal = (b, f) => { const a = atomsFor(b.list[0], f, registry); return a.length ? a[0] : null; };
+  const blocks = [...byBlock.values()].sort((a, b) =>
+    (layoutIdx(a.layout) - layoutIdx(b.layout)) || compareBy(a.layout.blockBy, blockVal, dict, registry)(a, b));
 
-  const blocks = [];
-  for (const [bkey, { p, entries }] of byBlock) {
-    const first = entries[0].meta || {};
-    const gb = p.groupBy || [];
-    const buckets = new Map();
-    for (const e of entries) {
-      const meta = e.meta || {};
-      // an item holding several values (n:[1,2,3]) appears under each of them (only the queried ones if constrained)
-      let combos = [{}];
-      for (const f of gb) {
-        let vals = asArray(meta[f]);
-        if (qf[f] && vals.length) { const kept = vals.filter((v) => qf[f].has(kindOf(c, f) === "enum" ? String(v).toUpperCase() : kindOf(c, f) === "text" ? normalizeText(v) : Number(v))); if (kept.length) vals = kept; }
-        if (!vals.length) vals = [null];
-        combos = combos.flatMap((o) => vals.map((v) => ({ ...o, [f]: v })));
-      }
-      for (const over of combos) {
-        const gk = gb.map((f) => (over[f] == null ? "" : String(over[f]))).join("|");
-        if (!buckets.has(gk)) buckets.set(gk, { over, items: [] });
-        buckets.get(gk).items.push({ e, over });
+  return blocks.map(({ layout, list }) => {
+    const first = list[0];
+    const bmeta = {};
+    for (const f of layout.blockBy) { const a = atomsFor(first, f, registry); if (a.length) bmeta[f] = a[0]; }
+    const name = renderSegments(layout.block, bmeta, { dict, registry }) || "Other";
+
+    // an item with several values of a group field appears under each requested (or each of its own) value
+    const buckets = new Map();   // key -> { bucket, items: [{e, bucket}] }
+    for (const e of list) {
+      const per = layout.groupBy.map((f) => {
+        const own = atomsFor(e, f, registry), want = q.fields && q.fields[f];
+        const vals = own.length ? (want ? own.filter((x) => want.has(x)) : own) : [null];
+        return vals.length ? vals : own;
+      });
+      for (const combo of cartesian(per)) {
+        const bucket = {};
+        layout.groupBy.forEach((f, k) => { if (combo[k] != null) bucket[f] = combo[k]; });
+        const k = layout.groupBy.map((f) => (bucket[f] == null ? "" : String(bucket[f]))).join("|");
+        if (!buckets.has(k)) buckets.set(k, { bucket, items: [] });
+        buckets.get(k).items.push({ e, bucket });
       }
     }
-    const groups = [...buckets.entries()]
-      .sort((a, b) => cmpVals(gb.map((f) => (a[1].over[f] == null ? Infinity : kindOf(c, f) === "number" ? Number(a[1].over[f]) : String(a[1].over[f]))), gb.map((f) => (b[1].over[f] == null ? Infinity : kindOf(c, f) === "number" ? Number(b[1].over[f]) : String(b[1].over[f])))))
-      .map(([gk, { over, items }]) => {
-        const sortBy = p.sortBy || [];
-        items.sort((x, y) => cmpVals(sortBy.map((f) => sortValue(c, f, x.e.meta || {})), sortBy.map((f) => sortValue(c, f, y.e.meta || {}))) || (x.e.i - y.e.i));
-        const hasAnchor = (e, o) => p.anchor && ctx && ctx.anchors && ctx.anchors[p.id] && anchorKeys(p, e.meta || {}, o).some((k) => ctx.anchors[p.id].has(k));
-        const anchorText = (e, o) => (hasAnchor(e, o) ? renderParts(c, p.anchor.title, metaCtx({ ...(e.meta || {}), ...p.anchor.where }, o, "")) : "");
-        const heading = gb.length ? renderParts(c, p.groupTitle, metaCtx(items[0].e.meta || {}, over, anchorText(items[0].e, over))) : "";
-        return {
-          key: gk, heading,
-          items: items.map(({ e, over: o }) => {
-            const meta = e.meta || {};
-            const anchored = p.itemTitleAnchored && hasAnchor(e, o) && !whenMatches(p.anchor.where, meta);
-            const title = renderParts(c, anchored ? p.itemTitleAnchored : p.itemTitle, metaCtx(meta, o, anchored ? anchorText(e, o) : "")) || cfg.emptyTitle || "File";
-            return { e, title };
-          })
-        };
-      });
-
-    const suffixText = renderParts(c, p.blockSuffix, queryCtx(qf));
-    blocks.push({
-      key: bkey, profile: p.id, order: p.order || 0,
-      title: renderParts(c, p.blockTitle, metaCtx(first, null, "")) || "Other",
-      suffix: suffixText ? " — " + suffixText : "",
-      count: entries.length,
-      showHeadings: gb.length > 0 && !(p.headingsUnlessQuery || []).some((k) => qf[k]),
-      groups,
-      _sort: [p.order || 0, ...(p.blockBy || []).map((f) => sortValue(c, f, first))]
+    const keys = [...buckets.keys()].sort((a, b) => compareBy(layout.groupBy, (x, f) => (buckets.get(x).bucket[f] == null ? null : buckets.get(x).bucket[f]), dict, registry)(a, b));
+    const groups = keys.map((k) => {
+      const { bucket, items } = buckets.get(k);
+      const sorted = items.slice().sort((x, y) => compareBy(layout.sortBy || [], (it, f) => { const a = atomsFor(it.e, f, registry); return a.length ? a[0] : null; }, dict, registry)(x, y) || (x.e.i - y.e.i));
+      let heading;
+      if (!Object.keys(bucket).length) heading = layout.group.none;
+      else {
+        const anchorKey = layout.anchor ? layout.anchor.keyBy.map((f) => (bucket[f] != null ? bucket[f] : atomsFor(first, f, registry)[0])).join("|") : null;
+        const hasAnchor = !!(layout.anchor && ctx && ctx.anchors && ctx.anchors[layout.id] && ctx.anchors[layout.id].has(anchorKey));
+        const vars = hasAnchor ? { anchor: renderTemplate(layout.anchor.label, layout.anchor.where, { dict, registry }) } : {};
+        heading = renderTemplate(hasAnchor ? layout.group.anchored : layout.group.plain, { ...bmeta, ...bucket }, { dict, registry, vars }) || layout.group.none;
+      }
+      return { key: k, heading, items: sorted.map(({ e, bucket: b }) => ({ e, bucket: b, title: titleFor(e, b, layout, ctx, dict, registry) })) };
     });
+    const constrained = (layout.flatWhenConstrained || []).some((f) => q.fields && q.fields[f] && q.fields[f].size);
+    return { key: layout.id + "§" + layout.blockBy.map((f) => (bmeta[f] == null ? "" : bmeta[f])).join("|"), layout: layout.id, name, suffix: suffixFor(layout, q, dict, registry), count: list.length, showHeadings: !constrained, groups };
+  });
+}
+
+// ----------------------------------------------------------------------------
+// 13. Filters: generated from the registry + the metadata that is actually loaded.
+//     getFacets() returns, per field, the values that exist in the CURRENT dataset:
+//       mode "chain"   (default)  option lists depend on the filters ABOVE them in the order
+//                                 (Level -> Subject -> Type -> Number ...)
+//       mode "faceted"            every list depends on all the OTHER filters
+//     `base` = constraints coming from the search box, applied to every list.
+//     Each facet also says `narrows` (false = a one-value list that every item shares: not worth a dropdown).
+// ----------------------------------------------------------------------------
+export function orderFields(keys, view = SEARCH_VIEW, registry = SEARCH_FIELDS) {
+  const set = new Set(keys), out = [];
+  for (const k of view.filters || []) if (set.delete(k)) out.push(k);
+  for (const k of Object.keys(registry)) if (set.delete(k)) out.push(k);
+  return out.concat([...set].sort());
+}
+
+export function discoverFields(entries, opts = {}) {
+  const seen = new Set();
+  for (const e of entries) for (const k of Object.keys(e.search_meta || {})) seen.add(k);
+  return orderFields([...seen], opts.view || SEARCH_VIEW, opts.registry || SEARCH_FIELDS);
+}
+
+function passes(e, fields, registry) {
+  for (const [field, expected] of Object.entries(fields)) {
+    if (!expected) continue;
+    const def = ownDef(registry, field);
+    if (!matchAtoms(e.atoms ? (e.atoms[field] || []) : atomsOf(field, e.search_meta && e.search_meta[field], { registry }), expected, !def || def.kind === "text")) return false;
   }
-  blocks.sort((a, b) => cmpVals(a._sort, b._sort));
-  for (const b of blocks) delete b._sort;
-  return blocks;
+  return true;
+}
+
+export function getFacets(entries, selected = {}, opts = {}) {
+  const registry = opts.registry || SEARCH_FIELDS, dict = opts.dict || SEARCH_DICTIONARY, view = opts.view || SEARCH_VIEW;
+  const order = opts.order || discoverFields(entries, { view, registry });
+  const mode = opts.mode || "chain";
+  const base = opts.base || {};
+  const facets = [];
+  order.forEach((field, idx) => {
+    let cons = { ...base };
+    for (const [k, v] of Object.entries(selected)) {
+      if (!v || !v.size || k === field) continue;
+      const pos = order.indexOf(k);
+      if (mode === "faceted" || pos < 0 || pos < idx) cons = combineConstraints(cons, { [k]: v }, { registry });
+    }
+    const def = ownDef(registry, field);
+    const opt = new Map();      // atom -> { value, label, count }
+    let pool = 0, covered = 0;  // items under the current constraints / how many of them carry this field
+    for (const e of entries) {
+      if (!passes(e, cons, registry)) continue;
+      pool++;
+      if (e.search_meta && e.search_meta[field] != null) covered++;
+      const raw = e.search_meta && e.search_meta[field];
+      if (raw == null) continue;
+      for (const v of Array.isArray(raw) ? raw : [raw]) {
+        const a = atomOf(def, v);
+        if (a == null) continue;
+        if (!opt.has(a)) opt.set(a, { value: a, label: displayValue(field, def && def.kind === "number" ? a : v, "short", { dict, registry }) || String(a), count: 0 });
+        opt.get(a).count++;
+      }
+    }
+    if (!opt.size) return;
+    const options = [...opt.values()].sort((x, y) => compareRank(valueRank(field, x.value, dict, registry), valueRank(field, y.value, dict, registry)));
+    // `narrows`: choosing a value would remove something (several values, or some items lack the field)
+    facets.push({ field, label: (def && def.label) || field, selected: selected[field] ? [...selected[field]] : [], options, pool, covered, narrows: options.length > 1 || covered < pool });
+  });
+  return facets;
+}
+
+// ----------------------------------------------------------------------------
+// 14. Path derivation: metadata that already lives in the folder tree (Level 3 > Semester 1 > ...)
+// ----------------------------------------------------------------------------
+const RX_CACHE = new Map();
+const rx = (p) => { let r = RX_CACHE.get(p); if (!r) { r = new RegExp(p); RX_CACHE.set(p, r); } return r; };
+
+// names = folder names root -> leaf.  Returns { meta, standalone }:
+//   meta        fields derived from the path (never overrides opts.base)
+//   standalone  true when a `standalone` rule matched (the path alone classifies the file)
+export function derivePathInfo(names, opts = {}) {
+  const dict = opts.dict || SEARCH_DICTIONARY, registry = opts.registry || SEARCH_FIELDS, rules = opts.rules || PATH_RULES;
+  const base = opts.base || {};
+  const lk = buildLookup(dict, registry);
+  const folders = (names || []).map((n) => normalizeText(String(n == null ? "" : n).replace(/[\u200b-\u200f\u2060-\u2064\ufeff]/g, ""))).filter(Boolean);
+  const derived = {};
+  let standalone = false;
+  const known = (f) => atomsOf(f, derived[f] != null ? derived[f] : base[f], { registry });
+  for (const rule of rules) {
+    if (rule.when && !Object.entries(rule.when).every(([f, vals]) => known(f).some((a) => vals.includes(a)))) continue;
+    let found;
+    for (const name of folders) {                       // deeper folder wins
+      let v;
+      if (rule.pattern) {
+        const m = rx(rule.pattern).exec(name);
+        if (m) v = rule.value ? rule.value.replace(/\$(\d)/g, (_, k) => m[Number(k)] || "") : m[1];
+      } else if (rule.dictionary) {
+        const map = lk.alias.get(rule.field), codes = map && map.get(name);
+        if (codes && codes.size === 1) { const c = [...codes][0]; if (!rule.only || rule.only.includes(c)) v = c; }
+      }
+      if (v != null) found = v;
+    }
+    if (found != null) { derived[rule.field] = found; if (rule.standalone) standalone = true; }
+  }
+  const clean = normalizeSearchMeta(derived, { dict, registry }) || {};
+  const meta = {};
+  for (const k of Object.keys(clean)) if (base[k] == null) meta[k] = clean[k];
+  return { meta, standalone };
+}
+export const deriveMetaFromPath = (names, opts = {}) => derivePathInfo(names, opts).meta;
+
+// meta typed by the admin + whatever the folder path already says (the admin's values win)
+export function completeMetaFromPath(meta, names, opts = {}) {
+  const base = normalizeSearchMeta(meta, opts) || {};
+  return normalizeSearchMeta({ ...deriveMetaFromPath(names, { ...opts, base }), ...base }, opts);
 }
