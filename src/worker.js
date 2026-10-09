@@ -35,7 +35,7 @@
 
 import { handleMiniApi } from "./miniapp-api.js";
 import {
-  SEARCH_DICTIONARY, SEARCH_FIELDS, parseAdminSearchInput, normalizeSearchMeta, orderedSearchMeta, describeMeta, codesHelpText
+  SEARCH_DICTIONARY, parseAdminSearchInput, normalizeSearchMeta, orderedSearchMeta, describeMeta, codesHelpText
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -3551,7 +3551,7 @@ async function __contentEnsureGuard(env) {
 //   the same Telegram file can legitimately live in several folders with different identities
 //   (e.g. the same slides under "Lec 1" and "Lec 2", or one exam under two subjects).
 //     search_name  TEXT  raw text the admin typed, e.g. "[MA].s [Lec].t [2].n"
-//     search_meta  TEXT  normalized JSON, e.g. {"s":"MA","t":"LEC","n":2}; extra registered fields are preserved
+//     search_meta  TEXT  normalized JSON, e.g. {"s":"MA","t":"LEC","n":2}; arbitrary field keys and their left-to-right order are preserved
 //   Both are OPTIONAL. Files without them behave exactly as before and are simply not part of
 //   the structured search. The original file_name / caption are never touched.
 //   The columns are added lazily ONLY if they are missing (see migrations/0001_search_meta.sql
@@ -6057,7 +6057,7 @@ async function handleAdminCallback(env, q, bag) {
     }
     if (op === "SQ_HELP") {
       await tgSend(env, chat_id,
-        "🔎 Search name help\n\nFormat (any parts, any order):\n" + __SEARCH_SYNTAX_HINT + "\n\n[MA].s = subject   [Lec].t = type   [2].n = number\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”.\n\n" + codesHelpText(SEARCH_DICTIONARY),
+        "🔎 Search name help\n\nWrite each part as value.field. The value comes first, then the field key.\n" + __SEARCH_SYNTAX_HINT + "\n\nField keys are not predefined; choose any valid key you need.\nValues with spaces go in [square brackets], e.g. [Class Schedule].t.\nEvery supplied field must match the same file placement; the order is kept from left to right.\nNumeric values/ranges work too: 1.n or 1-3.n.\nPlain words like ma lec 2 remain supported as a shortcut.\n\n" + codesHelpText(SEARCH_DICTIONARY),
         { noScope: true });
       return true;
     }
@@ -9077,7 +9077,7 @@ async function __adminScopeFlush(env, chatId, sc) {
 // ============================================================================
 // Admin: search names (structured search metadata)
 // ============================================================================
-const __SEARCH_SYNTAX_HINT = "[MA].s [Lec].t [2].n";
+const __SEARCH_SYNTAX_HINT = "ma.s rec.t 1.n";
 
 // Set (or clear when name/meta are empty) the search identity of ONE file placement in the draft.
 // It is per placement on purpose: the same Telegram file may sit in several folders with different identities.
@@ -9093,9 +9093,8 @@ function __searchShort(meta) {
   const clean = orderedSearchMeta(meta);
   if (!clean) return "";
   return Object.entries(clean).map(([key, value]) => {
-    const def = SEARCH_FIELDS[key];
-    const shown = Array.isArray(value) ? (value.length > 1 && value.every((n, i) => i === 0 || n === value[i - 1] + 1) ? value[0] + "-" + value[value.length - 1] : value.join(",")) : String(value);
-    return (def?.role === "subject" || def?.role === "type" ? "" : (def?.label ? def.label + ":" : key + ":")) + shown;
+    const shown = Array.isArray(value) ? (value.length > 1 && value.every((n, i) => Number.isFinite(Number(n)) && (i === 0 || Number(n) === Number(value[i - 1]) + 1)) ? value[0] + "-" + value[value.length - 1] : value.join(",")) : String(value);
+    return key + ":" + shown;
   }).join("·");
 }
 
@@ -9119,7 +9118,7 @@ async function __searchPromptSend(env, chat_id, node, fileId, pos, total, prefix
   if (!f) return null;
   const text = (prefix ? prefix + "\n\n" : "") +
     "🔎 Search name — file " + pos + "/" + total + "\n" + __searchFileLabel(f) +
-    "\n\nSend its search name, for example:\n" + __SEARCH_SYNTAX_HINT + "\n(or simply: ma lec 2)\nA part you leave out means “any”.";
+    "\n\nSend its search name as value.field parts, for example:\n" + __SEARCH_SYNTAX_HINT + "\n(or simply: ma lec 2 for the default natural search)\nYou choose the field keys; multi-word values go in [square brackets].\nEvery part filters the same placement, in left-to-right order.";
   const extra = { reply_markup: __searchPromptKb() };
   const cap = text.slice(0, 1000);
   let r = null;

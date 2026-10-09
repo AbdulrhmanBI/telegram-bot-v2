@@ -24,7 +24,7 @@ const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;     // reopen the app from the bot af
 const SEND_COOLDOWN_MS = 5000;                 // min gap between two sends of the same user (per isolate)
 const SEND_HOURLY_CAP = 40;                    // max sends / user / hour (per isolate)
 const GAP_BETWEEN_TG_CALLS_MS = 350;           // wall-clock pause only (no CPU), keeps Telegram flood limits happy
-const SLIM_BUILD_REV = 4;                      // rev 4: `sm` preserves all registered search fields
+const SLIM_BUILD_REV = 5;                      // rev 5: `sm` preserves arbitrary value.field metadata and field order
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const enc = new TextEncoder();
