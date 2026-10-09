@@ -158,7 +158,7 @@ h2{margin:6px 0 2px;font-size:20px}
 <script type="module">
 import {
   parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta
-} from "./search-core.js?v=2";
+} from "./search-core.js?v=3";
 
 (() => {
 "use strict";
@@ -273,7 +273,7 @@ function buildSearchIndex(){
       };
       // Keep the old shortcut properties for compatibility with existing display/test code;
       // the matcher reads every registered key from `meta`.
-      for (const [key, value] of Object.entries(sm)) entry[key] = key === "n" && value != null ? (Array.isArray(value) ? value : [value]) : value;
+      for (const [key, value] of Object.entries(sm)) entry[key] = value;
       entries.push(entry);
     });
   }

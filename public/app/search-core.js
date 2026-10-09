@@ -1,11 +1,11 @@
 // ============================================================================
-// Shared, field-agnostic search core.
-// The registry below is the only place where search fields are defined.
-// Add a field here (and its values in SEARCH_DICTIONARY when enum-based) to
-// make it available to admin syntax, natural queries, matching, and metadata.
+// Shared search core.
+// Admin metadata and explicit `value.field` chains are open-ended: any valid field
+// key is accepted and retained in order. SEARCH_FIELDS/SEARCH_DICTIONARY only
+// supply backward-compatible natural-language shortcuts such as `ma lec 2`.
 // ============================================================================
 
-export const SEARCH_CORE_REV = 2;
+export const SEARCH_CORE_REV = 3;
 
 export const SEARCH_DICTIONARY = {
   subjects: {
@@ -163,105 +163,85 @@ export function formatNumbers(n) {
   return values.every((x, i) => i === 0 || x === values[i - 1] + 1) ? `${values[0]}–${values[values.length - 1]}` : values.join(", ");
 }
 
-function canonicalEnum(key, value, dict = SEARCH_DICTIONARY) {
-  if (value == null || typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!raw) return null;
-  const values = dict[SEARCH_FIELDS[key]?.dictionary] || {};
-  const upper = raw.toUpperCase();
-  if (Object.prototype.hasOwnProperty.call(values, upper)) return upper;
-  const map = buildLookup(dict).valueMaps[key];
-  const codes = map?.get(normalizeText(raw));
-  if (codes?.size === 1) return [...codes][0];
-  if (/^[A-Za-z0-9_-]{1,64}$/.test(raw)) return upper;
-  // Free-text values are allowed for custom enum-like metadata but are not guessed.
-  return raw.slice(0, 100);
-}
-function normalizeFieldValue(key, value, dict = SEARCH_DICTIONARY) {
-  const def = SEARCH_FIELDS[key];
-  if (value == null || value === "") return undefined;
-  if (def?.kind === "number") {
-    const nums = canonNumbers(value);
-    return nums == null ? undefined : nums;
-  }
-  if (def?.kind === "enum") {
-    const normalizeOne = (v) => canonicalEnum(key, String(v), dict);
-    if (Array.isArray(value)) {
-      const arr = [...new Set(value.map(normalizeOne).filter(v => v != null))].sort((a,b) => String(a).localeCompare(String(b)));
-      return arr.length ? (arr.length === 1 ? arr[0] : arr) : undefined;
-    }
-    return normalizeOne(String(value));
-  }
-  const cleanOne = (v) => {
-    if (typeof v === "number" && Number.isFinite(v)) return v;
-    if (typeof v === "boolean") return v;
-    if (typeof v === "string" && v.trim()) return v.trim().slice(0, 120);
-    return undefined;
-  };
-  if (Array.isArray(value)) {
-    const arr = [...new Set(value.map(cleanOne).filter(v => v !== undefined))];
-    return arr.length ? (arr.length === 1 ? arr[0] : arr) : undefined;
-  }
-  return cleanOne(value);
-}
-function sortedMetaKeys(meta) {
-  const order = new Map(fieldEntries().map(([key], i) => [key, i]));
-  return Object.keys(meta).sort((a, b) => (order.get(a) ?? 10000) - (order.get(b) ?? 10000) || a.localeCompare(b));
-}
+// Metadata field names are intentionally open-ended. SEARCH_FIELDS is only for the
+// legacy natural-language shortcuts and optional presentation labels. Object order
+// is meaningful: the admin defines a left-to-right chain in the search name.
+function sortedMetaKeys(meta) { return Object.keys(meta || {}); }
 export function orderedSearchMeta(meta, dict = SEARCH_DICTIONARY) {
   const clean = normalizeSearchMeta(meta, dict);
-  if (!clean) return null;
-  const out = {};
-  for (const key of sortedMetaKeys(clean)) out[key] = clean[key];
-  return out;
+  return clean || null;
+}
+function cleanGenericMetaValue(value) {
+  if (value == null) return undefined;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const clean = value.trim().slice(0, 160);
+    return clean ? clean : undefined;
+  }
+  if (Array.isArray(value)) {
+    const out = [];
+    for (const item of value) {
+      if (Array.isArray(item) || (item && typeof item === "object")) continue;
+      const v = cleanGenericMetaValue(item);
+      if (v === undefined) continue;
+      if (!out.some(x => typeof x === typeof v && String(x) === String(v))) out.push(v);
+    }
+    return out.length ? (out.length === 1 ? out[0] : out) : undefined;
+  }
+  return undefined;
 }
 export function normalizeSearchMeta(meta, dict = SEARCH_DICTIONARY) {
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
   const out = {};
   for (const [sourceKey, value] of Object.entries(meta)) {
-    const key = String(sourceKey).toLowerCase();
-    if (!/^[a-z][a-z0-9_]{0,31}$/.test(key)) continue;
-    const normalized = normalizeFieldValue(key, value, dict);
+    const key = String(sourceKey).trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(key)) continue;
+    const normalized = cleanGenericMetaValue(value);
     if (normalized !== undefined) out[key] = normalized;
   }
-  return Object.keys(out).length ? Object.fromEntries(sortedMetaKeys(out).map(k => [k, out[k]])) : null;
+  return Object.keys(out).length ? out : null;
 }
 
-export function subjectName(code, dict = SEARCH_DICTIONARY) { return dict.subjects?.[code]?.name || String(code || ""); }
+export function subjectName(code, dict = SEARCH_DICTIONARY) { return dict.subjects?.[code]?.name || dict.subjects?.[String(code || "").toUpperCase()]?.name || String(code || ""); }
 export function typeLabel(code, plural = false, dict = SEARCH_DICTIONARY) {
-  const item = dict.types?.[code];
+  const item = dict.types?.[code] || dict.types?.[String(code || "").toUpperCase()];
   return item ? (plural ? item.plural || item.label : item.label) : String(code || "");
 }
 function enumLabel(key, value, dict = SEARCH_DICTIONARY) {
   const def = SEARCH_FIELDS[key];
-  const item = def?.dictionary ? dict[def.dictionary]?.[value] : null;
+  const item = def?.dictionary ? (dict[def.dictionary]?.[value] || dict[def.dictionary]?.[String(value ?? "").toUpperCase()]) : null;
   return item?.label || item?.name || String(value ?? "");
 }
 function printableFieldValue(key, value) {
   if (value == null) return "";
-  if (SEARCH_FIELDS[key]?.kind === "number") return formatNumbers(value);
+  if (SEARCH_FIELDS[key]?.kind === "number") {
+    const nums = (Array.isArray(value) ? value : [value]).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    if (nums.length > 1 && nums.every((n, i) => i === 0 || n === nums[i - 1] + 1)) return `${nums[0]}–${nums[nums.length - 1]}`;
+    return nums.length ? nums.join(", ") : String(value);
+  }
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 export function describeMeta(meta, dict = SEARCH_DICTIONARY) {
   const clean = normalizeSearchMeta(meta, dict);
-  if (!clean) return "—";
-  const parts = [];
-  for (const key of sortedMetaKeys(clean)) {
-    const value = clean[key], def = SEARCH_FIELDS[key];
-    if (def?.role === "subject") parts.push(`${value} (${subjectName(value, dict)})`);
-    else if (def?.role === "type") parts.push(enumLabel(key, value, dict));
-    else parts.push(`${def?.label || key}: ${printableFieldValue(key, value)}`);
+  return clean ? metaToSyntax(clean) : "—";
+}
+function genericValueToSyntax(value) {
+  if (Array.isArray(value)) {
+    if (value.every(v => Number.isInteger(Number(v)) && String(v).trim() !== "")) {
+      const nums = [...new Set(value.map(Number))].sort((a, b) => a - b);
+      if (nums.length > 1 && nums.every((n, i) => i === 0 || n === nums[i - 1] + 1)) return `${nums[0]}-${nums[nums.length - 1]}`;
+      return nums.join(",");
+    }
+    return `[${value.map(String).join("|")}]`;
   }
-  return parts.join(" · ");
+  const raw = String(value);
+  return /^[^\s.\[\]]+$/.test(raw) ? raw : `[${raw.replace(/\]/g, "\\]")}]`;
 }
 export function metaToSyntax(meta) {
   const clean = normalizeSearchMeta(meta);
   if (!clean) return "";
-  return sortedMetaKeys(clean).map(key => {
-    const value = clean[key];
-    const body = SEARCH_FIELDS[key]?.kind === "number" && Array.isArray(value) ? formatNumbers(value).replace("–", "-") : (Array.isArray(value) ? value.join(",") : String(value));
-    return `[${body}].${key}`;
-  }).join(" ");
+  return Object.entries(clean).map(([key, value]) => `${genericValueToSyntax(value)}.${key}`).join(" ");
 }
 
 export function parseNumberSpec(raw) {
@@ -288,45 +268,68 @@ function resolveUnique(map, raw, what, dict = SEARCH_DICTIONARY) {
   if (codes.size > 1) return { ok: false, error: `ambiguous ${what} "${raw}" (${[...codes].join(", ")}) — use the exact code` };
   return { ok: true, code: [...codes][0] };
 }
-function fieldTagAliases() {
-  const map = new Map();
-  for (const [key, def] of fieldEntries()) for (const alias of [key, ...(def.aliases || [])]) map.set(String(alias).toLowerCase(), key);
-  return map;
+function parseGenericNumericList(value) {
+  const normalized = String(value).replace(/[\u0660-\u0669]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06F0-\u06F9]/g, d => String(d.charCodeAt(0) - 0x06F0)).replace(/[–—]/g, "-").replace(/\s+/g, "");
+  if (!/^\d+(?:[-,]\d+)+$/.test(normalized)) return null;
+  const out = [];
+  for (const part of normalized.split(",")) {
+    if (/^\d+-\d+$/.test(part)) {
+      const [a, b] = part.split("-").map(Number);
+      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || b < a || b - a + 1 > MAX_RANGE_ITEMS) return null;
+      for (let n = a; n <= b; n++) out.push(n);
+    } else if (/^\d+$/.test(part)) {
+      const n = Number(part); if (!Number.isSafeInteger(n)) return null; out.push(n);
+    } else return null;
+  }
+  const values = [...new Set(out)].sort((a, b) => a - b);
+  return values.length === 1 ? values[0] : values;
 }
-export function parseAdminSyntax(text, dict = SEARCH_DICTIONARY) {
+function parseGenericSyntaxValue(raw) {
+  const value = String(raw == null ? "" : raw).trim();
+  if (!value) return undefined;
+  if (value.includes("|")) {
+    const parts = value.split("|").map(x => x.trim()).filter(Boolean);
+    return parts.length > 1 ? parts : (parts[0] || undefined);
+  }
+  if (/^\d+$/.test(value)) { const n = Number(value); return Number.isSafeInteger(n) ? n : value.slice(0, 160); }
+  const numericList = parseGenericNumericList(value);
+  if (numericList != null) return numericList;
+  return value.slice(0, 160);
+}
+function parseFieldSyntaxTokens(text) {
   const src = String(text == null ? "" : text).trim();
   if (!src) return { ok: false, error: "empty" };
-  const lk = buildLookup(dict), tags = fieldTagAliases(), re = /\[([^\]]*)\]\s*\.\s*([A-Za-z][A-Za-z0-9_]*)/g;
-  const meta = {}, seen = new Set(); let m, rest = src;
+  const re = /(?:\[([^\]]+)\]|([^\s.\[\]]+))\s*\.\s*([A-Za-z][A-Za-z0-9_-]{0,31})/g;
+  const meta = {}; const seen = new Set(); let m; let rest = src; let count = 0;
   while ((m = re.exec(src))) {
+    const key = String(m[3]).toLowerCase();
+    const value = parseGenericSyntaxValue(m[1] !== undefined ? m[1] : m[2]);
+    if (value === undefined) return { ok: false, error: `empty value for field ".${key}"` };
+    if (seen.has(key)) return { ok: false, error: `field ".${key}" appears twice; combine its values in one value` };
+    seen.add(key); meta[key] = value; count++;
     rest = rest.replace(m[0], " ");
-    const tag = tags.get(m[2].toLowerCase());
-    if (!tag) return { ok: false, error: `unknown tag ".${m[2]}" (add it to SEARCH_FIELDS first)` };
-    if (seen.has(tag)) return { ok: false, error: `the tag ".${tag}" appears twice` };
-    seen.add(tag);
-    const def = SEARCH_FIELDS[tag];
-    if (def.kind === "number") {
-      const r = parseNumberSpec(m[1]); if (!r.ok) return r; meta[tag] = r.n;
-    } else if (def.kind === "enum") {
-      const r = resolveUnique(lk.valueMaps[tag], m[1], def.label.toLowerCase(), dict); if (!r.ok) return r; meta[tag] = r.code;
-    } else {
-      const r = normalizeFieldValue(tag, m[1], dict); if (r === undefined) return { ok: false, error: `empty ${def.label.toLowerCase()}` }; meta[tag] = r;
-    }
   }
-  if (rest.replace(/\s+/g, "")) return { ok: false, error: `unexpected text "${rest.trim().slice(0, 40)}" — write every part as [value].tag` };
-  if (!Object.keys(meta).length) return { ok: false, error: "no field found" };
-  return { ok: true, meta: orderedSearchMeta(meta, dict) };
+  if (!count) return { ok: false, error: "no value.field parts found" };
+  if (rest.replace(/[\s,]+/g, "")) return { ok: false, error: `unexpected text "${rest.trim().slice(0, 40)}" — use value.field, e.g. ma.s rec.t 1.n` };
+  return { ok: true, meta: orderedSearchMeta(meta) };
+}
+export function parseAdminSyntax(text, dict = SEARCH_DICTIONARY) {
+  return parseFieldSyntaxTokens(text);
+}
+function looksLikeFieldSyntax(text) {
+  return /(?:\[[^\]]+\]|[^\s.\[\]]+)\s*\.\s*[A-Za-z][A-Za-z0-9_-]{0,31}(?=$|\s)/.test(String(text == null ? "" : text).trim());
 }
 
 export function parseAdminSearchInput(text, dict = SEARCH_DICTIONARY) {
   const src = String(text == null ? "" : text).trim();
   if (!src) return { ok: false, error: "empty" };
-  if (src.includes("[")) {
+  if (src.includes("[") || looksLikeFieldSyntax(src)) {
     const r = parseAdminSyntax(src, dict);
     return r.ok ? { ok: true, meta: normalizeSearchMeta(r.meta, dict), name: src.slice(0, 120) } : r;
   }
   const q = parseQuery(src + " ", { dict });
-  if (q.text.length) return { ok: false, error: `unknown word "${q.text[0]}" — use field syntax such as [MA].s [Lec].t [2].n` };
+  if (q.text.length) return { ok: false, error: `unknown word "${q.text[0]}" — use value.field syntax such as ma.s rec.t 1.n` };
   for (const [key, def] of fieldEntries()) {
     if (q[key] && q[key].size > 1) {
       if (def.kind === "number") return { ok: false, error: `write several ${def.label.toLowerCase()} values as a range/list in admin syntax` };
@@ -336,13 +339,13 @@ export function parseAdminSearchInput(text, dict = SEARCH_DICTIONARY) {
   const meta = {};
   for (const [key, def] of fieldEntries()) if (q[key]?.size) meta[key] = [...q[key]][0];
   const clean = normalizeSearchMeta(meta, dict);
-  if (!clean) return { ok: false, error: "nothing recognized — use field syntax such as [MA].s [Lec].t [2].n" };
+  if (!clean) return { ok: false, error: "nothing recognized — use value.field syntax such as ma.s rec.t 1.n" };
   return { ok: true, meta: clean, name: src.slice(0, 120) };
 }
 export function codesHelpText(dict = SEARCH_DICTIONARY) {
   const subjects = Object.entries(dict.subjects || {}).map(([code, v]) => `${code} — ${v.name}`).join("\n");
   const types = Object.entries(dict.types || {}).map(([code, v]) => `${code} — ${v.label}`).join("\n");
-  return "Subjects:\n" + subjects + "\n\nTypes:\n" + types + "\n\nFields:\n" + fieldEntries().map(([k, v]) => `.${k} — ${v.label}`).join("\n");
+  return "Known subjects (for natural search):\n" + subjects + "\n\nKnown content types (for natural search):\n" + types + "\n\nCustom search names use VALUE.FIELD. Field keys are yours to choose and do not need registration.\nExamples: ma.s rec.t 1.n\n[Class Schedule].t 3.l 1.sem\nValues with spaces go in [square brackets].\nFields are matched together in the order you write them, from left to right.";
 }
 
 function mapValueAt(map, tokens, i, remaining, typing, maxTokens) {
@@ -372,8 +375,19 @@ function searchableValueAppearsLater(tokens, from, lk) {
   return false;
 }
 function qAdd(q, key, values) { q[key] = q[key] || new Set(); for (const v of values) q[key].add(v); q.recognized = true; }
+function queryFromStructuredSyntax(parsed, norm = "") {
+  const q = { text: [], partial: false, recognized: true, empty: false, norm, fieldOrder: Object.keys(parsed.meta) };
+  for (const [key, value] of Object.entries(parsed.meta)) q[key] = new Set(Array.isArray(value) ? value : [value]);
+  return q;
+}
 export function parseQuery(raw, opts = {}) {
-  const dict = opts.dict || SEARCH_DICTIONARY, lk = buildLookup(dict), rawStr = String(raw == null ? "" : raw), norm = normalizeText(rawStr), tokens = tokensOf(norm);
+  const dict = opts.dict || SEARCH_DICTIONARY, rawStr = String(raw == null ? "" : raw);
+  // Explicit value.field chains use arbitrary field keys, independently from natural-query defaults.
+  if (looksLikeFieldSyntax(rawStr)) {
+    const parsed = parseFieldSyntaxTokens(rawStr);
+    if (parsed.ok) return queryFromStructuredSyntax(parsed, normalizeText(rawStr));
+  }
+  const lk = buildLookup(dict), norm = normalizeText(rawStr), tokens = tokensOf(norm);
   const typing = opts.typing != null ? !!opts.typing : !/\s$/.test(rawStr);
   const q = { text: [], partial: false, recognized: false, empty: !tokens.length, norm };
   for (const [key] of fieldEntries()) q[key] = null;
@@ -461,21 +475,42 @@ function valueForEntry(e, key) {
   if (e?.meta && Object.prototype.hasOwnProperty.call(e.meta, key)) return e.meta[key];
   return e?.[key];
 }
-function valuesOverlap(actual, expectedSet, key) {
+function valuesOverlap(actual, expectedSet, key, q) {
   if (actual == null) return false;
   const vals = Array.isArray(actual) ? actual : [actual];
   for (const value of vals) {
-    if (expectedSet.has(value) || expectedSet.has(String(value).toUpperCase()) || expectedSet.has(Number(value))) return true;
-    // Free-text fields (e.g. doctor, group name) match normalized substrings.
-    if (SEARCH_FIELDS[key]?.kind === "text") {
-      const hay = normalizeText(value);
-      for (const expected of expectedSet) if (hay.includes(normalizeText(expected))) return true;
+    for (const expected of expectedSet) {
+      if (String(value) === String(expected)) return true;
+      if (normalizeText(value) && normalizeText(value) === normalizeText(expected)) return true;
+      if (Number.isFinite(Number(value)) && Number.isFinite(Number(expected)) && String(value).trim() !== "" && String(expected).trim() !== "" && Number(value) === Number(expected)) return true;
+      // Natural-language aliases are only a convenience layer for the old shortcut search.
+      // Explicit value.field matching stays strictly generic and never reinterprets values.
+      if (!q?.fieldOrder && SEARCH_FIELDS[key]?.kind === "enum") {
+        const map = buildLookup().valueMaps[key];
+        const actualCodes = map?.get(normalizeText(value));
+        const expectedCodes = map?.get(normalizeText(expected));
+        if (actualCodes && expectedCodes && [...actualCodes].some(code => expectedCodes.has(code))) return true;
+      }
+      if (SEARCH_FIELDS[key]?.kind === "text" && normalizeText(value).includes(normalizeText(expected))) return true;
     }
   }
   return false;
 }
 export function matchEntry(e, q) {
-  for (const [key] of fieldEntries()) if (q[key] && !valuesOverlap(valueForEntry(e, key), q[key], key)) return false;
+  // Check the explicitly supplied chain first, in the exact left-to-right order entered.
+  // Remaining Set-valued constraints are natural-language search fields.
+  const checked = new Set();
+  const order = Array.isArray(q?.fieldOrder) ? q.fieldOrder : [];
+  for (const key of order) {
+    const expected = q[key];
+    if (!(expected instanceof Set)) continue;
+    checked.add(key);
+    if (!valuesOverlap(valueForEntry(e, key), expected, key, q)) return false;
+  }
+  for (const [key, expected] of Object.entries(q || {})) {
+    if (!(expected instanceof Set) || checked.has(key)) continue;
+    if (!valuesOverlap(valueForEntry(e, key), expected, key, q)) return false;
+  }
   if (q.text?.length) {
     const hay = e.hay || "";
     for (const word of q.text) if (!hay.includes(word)) return false;
@@ -487,7 +522,7 @@ export function buildContext(entries) {
   const lec = new Set(), subjectKey = fieldKeyForRole("subject"), typeKey = fieldKeyForRole("type"), numberKey = fieldKeyForRole("number");
   for (const e of entries) {
     const type = valueForEntry(e, typeKey), nums = valueForEntry(e, numberKey), subject = valueForEntry(e, subjectKey) || "";
-    if (type === "LEC" && nums != null) for (const n of Array.isArray(nums) ? nums : [nums]) lec.add(subject + "|" + n);
+    if (String(type || "").toUpperCase() === "LEC" && nums != null) for (const n of Array.isArray(nums) ? nums : [nums]) lec.add(subject + "|" + n);
   }
   return { lec };
 }
@@ -495,7 +530,7 @@ function itemTitle(e, n, ctx, dict) {
   const typeKey = fieldKeyForRole("type"), subjectKey = fieldKeyForRole("subject"), numberKey = fieldKeyForRole("number");
   const type = valueForEntry(e, typeKey), subject = valueForEntry(e, subjectKey) || "", label = type ? enumLabel(typeKey, type, dict) : "", num = n != null ? String(n) : "";
   if (!type) return num ? "#" + num : "Item";
-  if (type === "LEC") return num ? `${label} ${num}` : label;
+  if (String(type || "").toUpperCase() === "LEC") return num ? `${label} ${num}` : label;
   if (num && ctx?.lec?.has(subject + "|" + n)) return `Lecture ${num} ${label}`;
   return num ? `${label} ${num}` : label;
 }
@@ -511,6 +546,19 @@ function genericHeadingForNoSubject(entry, dict) {
   return "Other";
 }
 export function groupResults(matches, q, ctx, dict = SEARCH_DICTIONARY) {
+  // A value.field query is deliberately rendered generically. Do not assume that
+  // any custom field means subject/type/number; those semantics belong only to the
+  // optional plain-language shortcut mode below.
+  if (Array.isArray(q?.fieldOrder) && q.fieldOrder.length) {
+    const queryMeta = {};
+    for (const key of q.fieldOrder) {
+      const set = q[key];
+      if (set instanceof Set) queryMeta[key] = set.size === 1 ? [...set][0] : [...set];
+    }
+    const queryLabel = metaToSyntax(queryMeta);
+    const items = matches.map(e => ({ e, n: null, title: String(e?.f?.nm || (e?.f?.c ? String(e.f.c).split("\n")[0] : "") || e?.f?.t || "File") }));
+    return [{ s: "", name: "Search results", suffix: queryLabel ? " — " + queryLabel : "", count: matches.length, showHeadings: false, groups: [{ key: "", heading: "Results", items }] }];
+  }
   const lk = buildLookup(dict), subjectKey = fieldKeyForRole("subject"), typeKey = fieldKeyForRole("type"), numberKey = fieldKeyForRole("number");
   const bySubject = new Map();
   for (const entry of matches) {
@@ -551,6 +599,11 @@ export function groupResults(matches, q, ctx, dict = SEARCH_DICTIONARY) {
     for (const [key, def] of fieldEntries()) {
       if (key === subjectKey || key === typeKey || key === numberKey || !q[key]) continue;
       bits.push(`${def.label}: ${[...q[key]].map(v => printableFieldValue(key, v)).join(", ")}`);
+    }
+    const knownKeys = new Set(fieldEntries().map(([key]) => key));
+    for (const key of (q.fieldOrder || Object.keys(q))) {
+      if (knownKeys.has(key) || !(q[key] instanceof Set)) continue;
+      bits.push(`${key}: ${[...q[key]].map(v => String(v)).join(", ")}`);
     }
     let name = subjectCode ? subjectName(subjectCode, dict) : (list.length ? genericHeadingForNoSubject(list[0], dict) : "Other");
     // A type-only heading is already the block name; don't repeat it as a suffix.
