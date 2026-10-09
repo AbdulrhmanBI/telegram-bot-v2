@@ -166,8 +166,8 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta
-} from "./search-core.js?v=5";
+  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta, fieldLabel
+} from "./search-core.js?v=6";
 
 (() => {
 "use strict";
@@ -538,7 +538,15 @@ function renderNode(){
 }
 
 function hasActiveFilters(){ return Object.values(S.filters).some(v => v !== "" && v != null); }
-function filterLabel(key){ return String(key); }
+// UI labels are presentation-only metadata from SEARCH_FIELDS. They do not assign
+// semantic meaning to a key or restrict which value.field keys are accepted.
+// For new arbitrary keys without a configured label, make the key readable rather
+// than displaying raw lowercase/internal spelling.
+function filterLabel(key){
+  const configured = fieldLabel(key);
+  if (configured && configured !== key) return configured;
+  return String(key).replace(/[_-]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
+}
 // Filter values are shown as stored, without interpreting keys or translating values through
 // the legacy natural-language dictionary. The admin-owned value.field metadata is the source of truth.
 function filterValueLabel(_key, value){ return String(value); }
@@ -577,7 +585,7 @@ function renderFilters(){
     const selected = S.filters[key] || "";
     h += '<label class="sr" for="filter-' + esc(key) + '">Filter by ' + esc(filterLabel(key)) + '</label>' +
       '<select id="filter-' + esc(key) + '" class="filter-select' + (selected ? ' active' : '') + '" data-filter="' + esc(key) + '" aria-label="Filter by ' + esc(filterLabel(key)) + '">' +
-      '<option value="">All ' + esc(filterLabel(key)) + '</option>';
+      '<option value="">All</option>';
     for (const value of values) h += '<option value="' + esc(value) + '"' + (selected === value ? ' selected' : '') + '>' + esc(filterValueLabel(key, value)) + '</option>';
     h += '</select>';
   });
