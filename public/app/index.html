@@ -8,14 +8,12 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
-  color-scheme:light;
   --bg:#f4f6fb;--card:#ffffff;--text:#131a2a;--muted:#667085;--line:#e4e8f0;
   --accent:#2563eb;--accent-soft:#e8f0ff;--accent-text:#ffffff;
   --ok:#12a05c;--danger:#d92d20;--shadow:0 6px 24px rgba(16,24,40,.12);
   --radius:14px;
 }
 :root[data-theme="dark"]{
-  color-scheme:dark;
   --bg:#0e1320;--card:#171e30;--text:#e8ecf6;--muted:#93a0b8;--line:#26304a;
   --accent:#5b8def;--accent-soft:#1d2b4d;--accent-text:#0b1220;
   --ok:#34c78a;--danger:#f0645a;--shadow:0 6px 24px rgba(0,0,0,.5);
@@ -24,64 +22,23 @@
 html,body{margin:0;background:var(--bg);color:var(--text)}
 body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Arabic","Noto Naskh Arabic",Tahoma,Arial,sans-serif;font-size:15px;line-height:1.45;
   padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
-button,input,select{font:inherit;color:var(--text)}
-input,select{color-scheme:inherit}
-select option{color:var(--text);background:var(--card)}
+button,input{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-/* app shell: pages -> search -> compact filters -> breadcrumb -> page content */
-.top{position:sticky;top:0;z-index:20;background:var(--bg);padding:7px 10px 6px;padding-top:calc(7px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
-.page-nav{display:flex;align-items:center;gap:5px;overflow-x:auto;white-space:nowrap;margin:0 0 7px;padding:0 0 6px;border-bottom:1px solid var(--line);scrollbar-width:none}
-.page-nav::-webkit-scrollbar{display:none}
-.page-tab{flex:none;display:inline-flex;align-items:center;gap:6px;height:29px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);padding:4px 10px;font-size:12px;font-weight:600}
-.page-tab.active{color:var(--accent);background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 24%,var(--line))}
-.bar{display:flex;gap:6px;align-items:center}
-.search{flex:1;min-width:0;min-height:36px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none;font-size:13px;color-scheme:inherit}
-.search::placeholder{color:var(--muted);opacity:1}
+/* header */
+.top{position:sticky;top:0;z-index:20;background:var(--bg);padding:10px 12px 8px;padding-top:calc(10px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
+.bar{display:flex;gap:8px;align-items:center}
+.search{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none}
 .search:focus{border-color:var(--accent)}
-.filter-host{display:flex;flex-direction:column;align-items:flex-start;min-width:0;margin-top:4px;gap:0}
-.filter-toggle{appearance:none;display:inline-flex;align-items:center;gap:7px;min-height:30px;margin:0;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--muted);font-size:12px;font-weight:650;box-shadow:0 1px 2px rgba(16,24,40,.04);transition:background .14s ease,border-color .14s ease,color .14s ease}
-.filter-toggle:hover{border-color:color-mix(in srgb,var(--accent) 32%,var(--line));color:var(--text)}
-.filter-toggle.expanded{background:var(--card);border-color:var(--line);color:var(--text)}
-.filter-toggle.has-filters{border-color:color-mix(in srgb,var(--accent) 48%,var(--line));background:var(--accent-soft);color:var(--accent)}
-.filter-toggle svg{width:13px;height:13px;flex:none;opacity:.8}
-.filter-toggle .filter-count{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--accent);color:var(--accent-text);font-size:10px;font-weight:700}
-.filter-toggle .filter-caret{display:inline-block;font-size:10px;opacity:.7;transition:transform .14s ease}
-.filter-toggle.expanded .filter-caret{transform:rotate(180deg)}
-.filter-panel{width:100%;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--card) 82%,var(--bg));box-shadow:0 2px 9px rgba(16,24,40,.05)}
-.filter-panel:not(.filter-hidden){animation:filterPanelIn .14s ease-out}
-@keyframes filterPanelIn{from{opacity:.7;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
-.filter-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 1px 7px;font-size:10.5px;color:var(--muted);font-weight:650}
-.filter-clear{border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 7px}
-.filter-clear:active{background:var(--accent-soft);color:var(--accent)}
-.filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:start}
-.filter-cell{position:relative;min-width:0}
-/* Custom dropdowns are used instead of native <select> so mobile Telegram/WebView
-   shows an Excel-like list directly below the field rather than a full-screen picker. */
-.filter-select{appearance:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0;min-height:31px;border:1px solid var(--line);border-radius:8px;padding:6px 7px;font-size:11px;line-height:1.25;text-align:start;outline:none;background:var(--card);color:var(--text);cursor:pointer;transition:border-color .12s ease,background .12s ease}
-.filter-select .filter-current{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.filter-select .filter-chevron{width:12px;height:12px;flex:none;opacity:.75;transition:transform .12s ease}
-.filter-select[aria-expanded="true"] .filter-chevron{transform:rotate(180deg)}
-.filter-select:focus-visible{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent)}
-.filter-select.active{border-color:var(--accent);background:var(--accent-soft)}
-.filter-select:disabled{opacity:.45;cursor:default}
-.filter-options{position:absolute;top:calc(100% + 3px);inset-inline-start:0;z-index:100;min-width:min(190px,calc(100vw - 28px));max-width:calc(100vw - 24px);max-height:min(240px,38vh);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:var(--shadow)}
-.filter-cell:nth-child(3n) .filter-options{inset-inline-start:auto;inset-inline-end:0}
-.filter-option{display:block;width:100%;min-height:32px;padding:7px 9px;border:0;border-radius:7px;background:transparent;color:var(--text);font:inherit;font-size:12px;line-height:1.35;text-align:start;white-space:normal;overflow-wrap:anywhere;cursor:pointer}
-.filter-option:hover,.filter-option:focus-visible{outline:none;background:var(--accent-soft)}
-.filter-option[aria-selected="true"]{color:var(--accent);background:var(--accent-soft);font-weight:650}
-.filter-hidden{display:none!important}
-.iconbtn{flex:none;width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--text);display:grid;place-items:center;font-size:15px}
-.crumbs{display:flex;gap:3px;flex-wrap:wrap;align-items:center;margin-top:4px;font-size:12px;color:var(--muted)}
-.crumb:focus-visible{outline-offset:0}
-.crumb{background:none;border:0;padding:2px 3px;color:var(--accent);border-radius:5px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.iconbtn{flex:none;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-size:16px}
+.crumbs{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:13px;color:var(--muted)}
+.crumb{background:none;border:0;padding:2px 4px;color:var(--accent);border-radius:6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb.cur{color:var(--muted);cursor:default}
 .sep{opacity:.5}
 
 main{padding:12px;max-width:900px;margin:0 auto}
-.root-meta{margin-top:0;margin-bottom:10px}
 h2{margin:6px 0 2px;font-size:20px}
 .meta{color:var(--muted);font-size:12.5px;margin-bottom:12px}
 .sec{margin-top:18px}
@@ -115,6 +72,13 @@ h2{margin:6px 0 2px;font-size:20px}
 .sub-h:first-of-type{margin-top:6px}
 .grp{margin:12px 2px 6px;font-size:13px;font-weight:650;color:var(--accent)}
 .hint{margin-top:6px;font-size:13px;color:var(--muted)}
+.filters{display:none;gap:8px;flex-wrap:wrap;margin-top:8px}
+.filters.show{display:flex}
+.filters label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted);min-width:0;flex:1 1 110px}
+.filters select{width:100%;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:13px}
+.filters select.on{border-color:var(--accent)}
+.filters .fclear{align-self:flex-end;border:0;background:var(--accent-soft);color:var(--danger);border-radius:10px;padding:9px 12px;font-size:13px}
+.iconbtn.on{border-color:var(--accent);background:var(--accent-soft)}
 
 /* notes / urls */
 .note,.url{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -171,12 +135,12 @@ h2{margin:6px 0 2px;font-size:20px}
 </head>
 <body>
 <header class="top">
-  <nav id="pageNav" class="page-nav" role="tablist" aria-label="App pages"></nav>
   <div class="bar">
     <input id="q" class="search" type="search" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="search">
+    <button id="fBtn" class="iconbtn" type="button" aria-label="Filters" title="Filters" hidden>⚙️</button>
     <button id="themeBtn" class="iconbtn" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
-  <div id="filterHost" class="filter-host"></div>
+  <div id="filters" class="filters" role="group" aria-label="filters"></div>
   <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
 </header>
 
@@ -202,15 +166,16 @@ h2{margin:6px 0 2px;font-size:20px}
 
 <script type="module">
 import {
-  parseQuery, matchEntry, buildContext, groupResults, normalizeText, normalizeSearchMeta, fieldLabel, fieldOptionValues
-} from "./search-core.js?v=8";
+  parseQuery, matchFields, makeEntry, effectiveConstraints, buildContext, groupResults,
+  buildFilterModel, sanitizeFilters, normalizeText
+} from "./search-core.js?v=2";
 
 (() => {
 "use strict";
 
 /* ───────────── i18n ───────────── */
 const I18N = { en: {
-    title:"Library", search:"Search… e.g. ma lec 2", searchTry:"Try for example:  ma  ·  ma lec  ·  ma 2  ·  ma lec 2", capNote:"Showing the first {n} results — type more to narrow down.", root:"Home", folders:"Folders", files:"Files",
+    title:"Library", search:"Search… e.g. ma lec 2", searchTry:"Try for example:  ma  ·  ma lec  ·  ma 2  ·  ma lec 2", filters:"Filters", anyValue:"Any", clearFilters:"Clear filters", capNote:"Showing the first {n} results — type more to narrow down.", root:"Home", folders:"Folders", files:"Files",
     notes:"Notes", links:"Links", selectAll:"Select all", unselectAll:"Unselect all", copy:"Copy", copied:"Copied",
     cart:"File cart", review:"Review & send", send:"Send to Telegram", sending:"Sending…", clear:"Clear",
     empty:"This folder is empty.", noResults:"No results.", results:"results", items:"items", filesN:"files", foldersN:"folders",
@@ -255,7 +220,7 @@ const S = {
   cart: LS.get("lib:cart", []),
   cur: null, trail: [], query: "", sending: false, sheet: null, banner: null,
   sindex: [], sctx: null,         // local structured-search index (built once per content load)
-  page: "library", filters: {}, filterFields: [], filtersOpen: false, openFilterKey: null
+  filters: {}, fOpen: false, fmodel: [], qp: null
 };
 const T = (k, p) => {
   let s = I18N.en[k] || k;
@@ -263,22 +228,6 @@ const T = (k, p) => {
   return s;
 };
 const $ = (id) => document.getElementById(id);
-// Register app-level pages here. The whole existing browser/search/cart experience lives
-// inside Library; future tools (for example a GPA calculator) can be added as separate pages.
-const APP_PAGES = [
-  { id: "library", label: "Library", render: () => (S.query.trim() || hasActiveFilters()) ? renderSearch() : renderNode(), library: true }
-];
-function renderPageNav(){
-  const nav = $("pageNav");
-  if (!nav) return;
-  nav.innerHTML = APP_PAGES.map(page => '<button type="button" class="page-tab' + (S.page === page.id ? ' active' : '') + '" role="tab" aria-selected="' + (S.page === page.id ? 'true' : 'false') + '" data-page="' + esc(page.id) + '">' + esc(page.label) + '</button>').join("");
-}
-function switchPage(id){
-  if (!APP_PAGES.some(page => page.id === id)) return;
-  if (S.page === id) return;
-  S.page = id;
-  renderAll();
-}
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
 const ICON = { audio:"🎧", video:"🎥", photo:"🖼️", document:"📄", sticker:"🏷️", voice:"🎙️" };
 const icon = (t) => ICON[t] || "📎";
@@ -320,33 +269,21 @@ function indexParents(){
   for (const [id, n] of Object.entries(S.data.nodes)) for (const row of n.r || []) for (const c of row) if (!(c in S.parent)) S.parent[c] = id;
   buildSearchIndex();
 }
-// Structured search index: ONLY fields explicitly saved in each placement's search metadata.
-// Folder names, hierarchy and built-in labels never invent filters. Add a field by tagging
-// content with value.field syntax; it appears automatically once that metadata is present.
-// Built once per content load/update; typing and filter changes never touch the network, KV or D1.
+// Structured search index: only files that carry metadata (`sm`) take part. Field-agnostic: whatever
+// fields the server sent ({s,t,n,l,sem,v,doctor,...}) are indexed as they are. Built once per content
+// load/update; typing never touches the network, KV or D1.
 function buildSearchIndex(){
-  const entries = [], fieldOrder = [];
+  const entries = [];
   for (const [id, n] of Object.entries(S.data.nodes)) {
     (n.f || []).forEach((f, i) => {
-      const meta = normalizeSearchMeta(f.sm) || {};
-      if (!Object.keys(meta).length) return;
-      const entry = {
-        id, i, f, meta,
-        hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "") + " " + pathNames(id).join(" "))
-      };
-      for (const [key, value] of Object.entries(meta)) {
-        entry[key] = value;
-        if (!fieldOrder.includes(key)) fieldOrder.push(key);
-      }
-      entries.push(entry);
+      const sm = f.sm;
+      if (!sm || typeof sm !== "object" || !Object.keys(sm).length) return;
+      entries.push(makeEntry({ id, i, f, hay: normalizeText((f.nm || "") + " " + (f.c || "") + " " + (n.n || "")) }, sm));
     });
   }
   S.sindex = entries;
   S.sctx = buildContext(entries);
-  S.filterFields = fieldOrder;
-  // Preserve only selections that still exist after content refresh.
-  const known = new Set(fieldOrder);
-  for (const key of Object.keys(S.filters)) if (!known.has(key)) delete S.filters[key];
+  S.filters = {};
 }
 function chain(id){
   const out = []; let cur = String(id), g = 0, root = String(S.data.root);
@@ -451,9 +388,7 @@ function open(id, push = true){
   renderAll(); window.scrollTo(0, 0);
 }
 function back(){
-  if (S.page !== "library") { S.page = "library"; renderAll(); return true; }
   if (S.query) { S.query = ""; $("q").value = ""; renderAll(); return true; }
-  if (hasActiveFilters()) { clearFilters(); return true; }
   if (S.sheet) { closeSheet(); return true; }
   if (S.trail.length) { open(S.trail.pop(), false); return true; }
   const p = S.parent[S.cur]; if (p) { open(p, false); return true; }
@@ -462,7 +397,7 @@ function back(){
 function syncBackButton(){
   if (webviewUrl) { try { tg && tg.BackButton && tg.BackButton.show(); } catch(_) {} return; }
   if (!tg || !tg.BackButton) return;
-  const can = !!(S.page !== "library" || S.query || hasActiveFilters() || S.sheet || S.trail.length || (S.cur && S.cur !== String(S.data && S.data.root)));
+  const can = !!(S.query || S.sheet || S.trail.length || (S.cur && S.cur !== String(S.data && S.data.root)));
   try { can ? tg.BackButton.show() : tg.BackButton.hide(); } catch(_) {}
 }
 if (tg && tg.BackButton) tg.BackButton.onClick(() => back());
@@ -538,26 +473,15 @@ function fileCard(n, f, i, sub){
     '<span class="fsub">' + esc(sub || meta) + (cap && !sub ? " · " + esc(cap.slice(0, 80)) : "") + "</span></span></button>";
 }
 
-function filterControls(){
-  if (!S.filterFields.length || S.page !== "library") return "";
-  const activeCount = Object.values(S.filters).filter(v => v !== "" && v != null).length;
-  const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>';
-  return '<button type="button" class="filter-toggle' + (S.filtersOpen ? ' expanded' : '') + (activeCount ? ' has-filters' : '') + '" data-toggle-filters="1" aria-expanded="' + (S.filtersOpen ? 'true' : 'false') + '">' + icon + '<span>Filter</span>' + (activeCount ? ' <span class="filter-count">' + activeCount + '</span>' : '') + '<span class="filter-caret" aria-hidden="true">⌄</span></button>' +
-    '<div id="filterPanel" class="filter-panel' + (S.filtersOpen ? '' : ' filter-hidden') + '" aria-label="Filters"></div>';
-}
-
 function renderNode(){
   const nd = node(S.cur); if (!nd) return "";
   const rows = nd.r || [], files = nd.f || [], notes = nd.o || [], urls = nd.u || [];
   const childCount = rows.reduce((a, r) => a + r.length, 0);
   let h = "";
   if (S.banner) { h += '<div class="banner' + (S.banner.err ? " err" : "") + '">' + esc(S.banner.t) + "</div>"; S.banner = null; }
-  // The active page name is already shown in the top page navigation; avoid repeating
-  // "Library" inside the root content. Folder titles remain visible when browsing deeper.
-  const isRoot = S.cur === String(S.data.root);
-  if (!isRoot) h += '<h2 dir="auto">' + esc(nd.n) + "</h2>";
-  const countMeta = [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ");
-  if (countMeta) h += '<div class="meta' + (isRoot ? ' root-meta' : '') + '">' + countMeta + "</div>";
+  h += '<h2 dir="auto">' + esc(S.cur === String(S.data.root) ? T("title") : nd.n) + "</h2>";
+  h += '<div class="meta">' + [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ") + "</div>";
+
   if (rows.length) {
     // Flatten all child rows for Mini App display only, preserving exact order.
     // This prevents a source row with one item from creating a visual gap.
@@ -601,77 +525,6 @@ function renderNode(){
   return h;
 }
 
-function hasActiveFilters(){ return Object.values(S.filters).some(v => v !== "" && v != null); }
-// UI labels are presentation-only metadata from SEARCH_FIELDS. They do not assign
-// semantic meaning to a key or restrict which value.field keys are accepted.
-// For new arbitrary keys without a configured label, make the key readable rather
-// than displaying raw lowercase/internal spelling.
-function filterLabel(key){
-  const configured = fieldLabel(key);
-  if (configured && configured !== key) return configured;
-  return String(key).replace(/[_-]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
-}
-// Filter values are shown as stored, without interpreting keys or translating values through
-// the legacy natural-language dictionary. The admin-owned value.field metadata is the source of truth.
-function filterValueLabel(_key, value){ return String(value); }
-function fieldValues(entry, key){
-  const value = entry.meta?.[key];
-  return value == null ? [] : (Array.isArray(value) ? value : [value]).map(v => String(v));
-}
-function entryMatchesSelectedFilters(entry, exceptKey = null){
-  for (const key of S.filterFields){
-    if (key === exceptKey) continue;
-    const wanted = S.filters[key];
-    if (wanted == null || wanted === "") continue;
-    if (!fieldValues(entry, key).some(v => v === String(wanted))) return false;
-  }
-  return true;
-}
-function dependentFieldKeys(parentKey){
-  const descendants = new Set();
-  // Dependencies are per content path. A field can be a root on one path and
-  // a child on another, so clearing selections by global dropdown position is wrong.
-  for (const entry of S.sindex) {
-    const keys = Object.keys(entry.meta || {});
-    const at = keys.indexOf(parentKey);
-    if (at >= 0) for (const child of keys.slice(at + 1)) descendants.add(child);
-  }
-  return descendants;
-}
-function renderFilters(){
-  const panel = $("filterPanel");
-  if (!panel) return;
-  if (!S.sindex.length || !S.filterFields.length){ S.openFilterKey = null; panel.innerHTML = ""; panel.classList.add("filter-hidden"); return; }
-  panel.classList.toggle("filter-hidden", !S.filtersOpen);
-  if (S.openFilterKey && !S.filterFields.includes(S.openFilterKey)) S.openFilterKey = null;
-  const activeCount = Object.values(S.filters).filter(v => v !== "" && v != null).length;
-  let h = '<div class="filter-heading"><span>Filters' + (activeCount ? ' · ' + activeCount + ' active' : '') + '</span>' +
-    (activeCount ? '<button type="button" class="filter-clear" data-clear-filters="1">Clear</button>' : '') + '</div><div class="filter-grid">';
-  S.filterFields.forEach((key) => {
-    // Choices are based on this item's left-to-right metadata path. A field only
-    // unlocks after the preceding fields in that same path have been selected.
-    const values = fieldOptionValues(S.sindex, key, S.filters);
-    const selected = S.filters[key] || "";
-    const expanded = S.openFilterKey === key;
-    const disabled = !values.length && !selected;
-    h += '<div class="filter-cell">' +
-      '<label class="sr" for="filter-' + esc(key) + '">Filter by ' + esc(filterLabel(key)) + '</label>' +
-      '<button type="button" id="filter-' + esc(key) + '" class="filter-select' + (selected ? ' active' : '') + '" data-filter-trigger="' + esc(key) + '" aria-label="Filter by ' + esc(filterLabel(key)) + '" aria-haspopup="listbox" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="filter-list-' + esc(key) + '"' + (disabled ? ' disabled' : '') + '>' +
-      '<span class="filter-current" dir="auto">' + esc(selected ? filterValueLabel(key, selected) : '-') + '</span>' +
-      '<svg class="filter-chevron" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 6 4.5 4 4.5-4"/></svg>' +
-      '</button>' +
-      '<div id="filter-list-' + esc(key) + '" class="filter-options' + (expanded && S.filtersOpen ? '' : ' filter-hidden') + '" data-filter-list="' + esc(key) + '" role="listbox" aria-label="' + esc(filterLabel(key)) + '">' +
-      '<button type="button" class="filter-option" role="option" data-filter-choice="' + esc(key) + '" data-value="" aria-selected="' + (!selected ? 'true' : 'false') + '">-</button>';
-    for (const value of values) {
-      h += '<button type="button" class="filter-option" role="option" data-filter-choice="' + esc(key) + '" data-value="' + esc(value) + '" aria-selected="' + (selected === value ? 'true' : 'false') + '">' + esc(filterValueLabel(key, value)) + '</button>';
-    }
-    h += '</div></div>';
-  });
-  h += '</div>';
-  panel.innerHTML = h;
-}
-function clearFilters(){ S.filters = {}; S.openFilterKey = null; renderAll(); }
-
 // Old plain-text search (folder names + file names/captions). Still used for words that are not
 // part of the dictionary, and as a fallback while content has no search metadata yet.
 function legacySearch(raw){
@@ -707,43 +560,55 @@ function resultCard(e, title){
 }
 
 const RESULT_CAP = 300;
+const noRes = (r) => '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
+
+// parsed query + dependent filter model, computed once per render (pure, local)
+function prepSearch(){
+  const q = parseQuery(S.query);
+  S.qp = q;
+  S.filters = sanitizeFilters(S.sindex, { query: q.fields, filters: S.filters });
+  S.fmodel = buildFilterModel(S.sindex, { query: q.fields, filters: S.filters });
+}
+const hasFilters = () => Object.keys(S.filters).length > 0;
+
+function renderFilters(){
+  const box = $("filters"), btn = $("fBtn");
+  const usable = S.sindex.length > 0 && S.fmodel.length > 0;
+  btn.hidden = !usable;
+  btn.classList.toggle("on", hasFilters());
+  box.classList.toggle("show", usable && (S.fOpen || hasFilters()));
+  if (!usable) { box.innerHTML = ""; return; }
+  let h = "";
+  for (const f of S.fmodel) {
+    h += '<label dir="auto"><span>' + esc(f.label) + '</span><select data-f="' + esc(f.key) + '" class="' + (f.selected != null ? "on" : "") + '"><option value="">' + esc(T("anyValue")) + "</option>";
+    for (const o of f.options) h += '<option value="' + esc(String(o.value)) + '"' + (f.selected != null && String(f.selected) === String(o.value) ? " selected" : "") + ">" + esc(o.label) + "</option>";
+    h += "</select></label>";
+  }
+  if (hasFilters()) h += '<button class="fclear" type="button" data-fclear="1">' + esc(T("clearFilters")) + "</button>";
+  box.innerHTML = h;
+}
+
 function renderSearch(){
-  const raw = S.query;
-  const q = parseQuery(raw);
-  const filtering = hasActiveFilters();
-  if (q.empty && !filtering) return "";
+  const q = S.qp;
+  if (q.empty && !hasFilters()) return "";
 
-  // Retain the legacy folder/file-name search when no structured filters are active.
-  // With filters active, apply the free-text term locally to the same indexed subset.
-  if (!q.empty && (!q.recognized || !S.sindex.length) && !filtering) {
-    const r = legacySearch(raw);
-    return '<div class="meta">' + r.n + " " + T("results") + "</div>" + (r.n ? r.html : '<div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>");
-  }
+  // Nothing structured in the query and no filter (or content without metadata yet): classic text search.
+  if ((!q.recognized && !hasFilters()) || !S.sindex.length) return noRes(legacySearch(S.query));
 
-  const normalizedTerm = normalizeText(raw);
-  const matches = S.sindex.filter((e) => {
-    if (!entryMatchesSelectedFilters(e)) return false;
-    if (q.empty) return true;
-    if (q.recognized) return matchEntry(e, q);
-    return normalizedTerm ? normalizedTerm.split(" ").filter(Boolean).every(word => e.hay.includes(word)) : true;
-  });
-  if (!matches.length) {
-    // Never fall back to an unfiltered result list when the user has selected filters.
-    if (!filtering && !q.empty) {
-      const r = legacySearch(raw);      // metadata-less content stays findable by plain text
-      if (r.n) return '<div class="meta">' + r.n + " " + T("results") + "</div>" + r.html;
-    }
-    return '<div class="meta">0 ' + T("results") + '</div><div class="empty">' + T("noResults") + '<div class="hint">' + esc(T("searchTry")) + "</div></div>";
-  }
-  const blocks = groupResults(matches, q, S.sctx);
+  // Structured search + filters: every field mentioned is a constraint, everything else is ANY.
+  const cons = effectiveConstraints(q.fields, S.filters);
+  const eff = { fields: cons, text: q.text };
+  const matches = S.sindex.filter((e) => matchFields(e, cons) && q.text.every((w) => e.hay.includes(w)));
+  if (!matches.length) return hasFilters() ? '<div class="empty">' + T("noResults") + "</div>" : noRes(legacySearch(S.query));   // metadata-less content stays findable by text
+  const blocks = groupResults(matches, eff, S.sctx);
   let h = '<div class="meta">' + matches.length + " " + T("results") + "</div>";
   let shown = 0;
   for (const b of blocks) {
     if (shown >= RESULT_CAP) break;
-    h += '<div class="sub-h" dir="auto">' + esc(b.name + b.suffix) + "</div>";
+    h += '<div class="sub-h" dir="auto">' + esc(b.title + b.suffix) + "</div>";
     for (const g of b.groups) {
       if (shown >= RESULT_CAP) break;
-      if (b.showHeadings) h += '<div class="grp" dir="auto">' + esc(g.heading) + "</div>";
+      if (b.showHeadings && g.heading) h += '<div class="grp" dir="auto">' + esc(g.heading) + "</div>";
       h += '<div class="files">';
       for (const it of g.items) { if (shown >= RESULT_CAP) break; h += resultCard(it.e, it.title); shown++; }
       h += "</div>";
@@ -755,7 +620,7 @@ function renderSearch(){
 
 function renderCartBar(){
   const bar = $("cartbar"), c = cartCounts();
-  bar.classList.toggle("show", S.cart.length > 0 && !S.sheet && S.page === "library");
+  bar.classList.toggle("show", S.cart.length > 0 && !S.sheet);
   $("openCart").innerHTML = "<span>🛒 " + T("review") + '</span><span class="pill">' + esc(T("cartLimits", { r:c.records, mr:MAX_RECORD_ITEMS, f:c.files, mf:MAX_FILE_ITEMS })) + "</span>";
 }
 
@@ -772,17 +637,10 @@ function normalizeFolderGrid(){
 function renderAll(keepScroll){
   if (!S.data) return;
   const y = window.scrollY;
-  renderPageNav();
-  const page = APP_PAGES.find(item => item.id === S.page) || APP_PAGES[0];
-  const onLibrary = !!page.library;
-  $("q").classList.toggle("filter-hidden", !onLibrary);
-  $("themeBtn").classList.remove("filter-hidden");
-  $("filterHost").innerHTML = onLibrary ? filterControls() : "";
-  $("crumbs").classList.toggle("filter-hidden", !onLibrary);
-  if (onLibrary) renderCrumbs(); else $("crumbs").innerHTML = "";
-  const content = page.render();
-  $("app").innerHTML = content;
+  renderCrumbs();
+  prepSearch();
   renderFilters();
+  $("app").innerHTML = (S.query.trim() || hasFilters()) ? renderSearch() : renderNode();
   normalizeFolderGrid();
   renderCartBar();
   if (S.sheet) renderSheet();
@@ -960,13 +818,13 @@ $("webviewFrame").addEventListener("error",()=>$("webviewNote").classList.add("s
 /* ───────────── events ───────────── */
 document.addEventListener("click", (e) => {
   const t = e.target;
-  const pageTab = t.closest("[data-page]");
-  if (pageTab) { switchPage(pageTab.dataset.page); return; }
   const ext = t.closest("[data-ext]");
   if (ext) { e.preventDefault(); const href = ext.getAttribute("href") || ""; if (/^https?:/i.test(href)) openWebView(href); else { openExternalRobust(href); } return; }
   const go = t.closest("[data-go]"); if (go && !go.disabled) { open(go.dataset.go, true); haptic(); return; }
   const tgl = t.closest("[data-tg]"); if (tgl) { const [n, k] = tgl.dataset.tg.split("|"); toggle(n, k); return; }
   const rm = t.closest("[data-rm]"); if (rm) { const [n, k] = rm.dataset.rm.split("|"); S.cart = S.cart.filter((c) => !(c.n === n && c.k === k)); persist(); renderAll(true); return; }
+  if (t.closest("[data-fclear]")) { S.filters = {}; renderAll(); return; }
+  if (t.closest("#fBtn")) { S.fOpen = !S.fOpen; renderAll(true); return; }
   const cp = t.closest("[data-copy]"); if (cp) { const nd = node(S.cur); const txt = nd && nd.o && nd.o[Number(cp.dataset.copy)]; if (txt) { (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast(T("copied"))).catch(() => {}); } return; }
   const act = t.closest("[data-act]");
   if (act) {
@@ -987,52 +845,12 @@ $("q").addEventListener("input", (e) => {
   cancelAnimationFrame(qRaf);
   qRaf = requestAnimationFrame(() => renderAll());
 });
-$("filterHost").addEventListener("click", (e) => {
-  const choice = e.target.closest("[data-filter-choice]");
-  if (choice) {
-    const key = choice.dataset.filterChoice;
-    const value = choice.dataset.value || "";
-    const previous = S.filters[key] || "";
-    S.openFilterKey = null;
-    if (previous !== value) {
-      if (value) S.filters[key] = value; else delete S.filters[key];
-      // Clear true descendants from the selected path; unrelated paths remain selected.
-      for (const child of dependentFieldKeys(key)) delete S.filters[child];
-    }
-    renderAll(true);
-    return;
-  }
-  const trigger = e.target.closest("[data-filter-trigger]");
-  if (trigger) {
-    if (trigger.disabled) return;
-    const key = trigger.dataset.filterTrigger;
-    S.openFilterKey = S.openFilterKey === key ? null : key;
-    renderFilters();
-    return;
-  }
-  if (e.target.closest("[data-toggle-filters]")) {
-    S.filtersOpen = !S.filtersOpen;
-    if (!S.filtersOpen) S.openFilterKey = null;
-    renderAll(true);
-    return;
-  }
-  if (e.target.closest("[data-clear-filters]")) clearFilters();
-});
-// Dismiss the anchored list on an outside tap. The choices remain inline under the
-// button; no native mobile select dialog or full-screen picker is opened.
-document.addEventListener("click", (e) => {
-  if (!S.openFilterKey) return;
-  if (e.target.closest("[data-filter-trigger]") || e.target.closest("[data-filter-list]")) return;
-  S.openFilterKey = null;
-  renderFilters();
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || !S.openFilterKey) return;
-  const key = S.openFilterKey;
-  S.openFilterKey = null;
-  renderFilters();
-  const trigger = document.querySelector('[data-filter-trigger="' + CSS.escape(key) + '"]');
-  if (trigger) trigger.focus();
+document.addEventListener("change", (e) => {
+  const sel = e.target && e.target.closest && e.target.closest("select[data-f]");
+  if (!sel) return;
+  const key = sel.dataset.f, m = S.fmodel.find((x) => x.key === key), opt = m && m.options.find((o) => String(o.value) === sel.value);
+  if (opt) S.filters = { ...S.filters, [key]: opt.value }; else { const n = { ...S.filters }; delete n[key]; S.filters = n; }
+  renderAll();
 });
 window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart = LS.get("lib:cart", []); renderAll(true); } });
 
