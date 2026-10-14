@@ -5,6 +5,10 @@
 //   - ADMIN content viewing/editing uses the published KV snapshot plus a per-admin D1 draft/session.
 //   - Authoritative content-table writes occur on explicit admin Save/Force Save (and recovery/admin operations).
 //   - Block status: RAM (2 min) -> Cache API -> D1 primary-key read on a miss (bans are authoritative; a D1 error is never cached).
+//     Active users get a background "refresh-ahead" in the last 30 s of the 2-minute window, so the check never blocks a press.
+//   - Published content: RAM fresh window 2 min, then stale-while-revalidate (served instantly, refreshed in the background).
+//   - Monitoring: ONLY Mini App opens are reported (instant message to MON_ADMIN_ID, sent via ctx.waitUntil).
+//     Chat-activity monitoring (forwarding user messages / bot replies) is switched off by MONITOR_CHAT_ACTIVITY below.
 // ============================================================================
 // Cloudflare Worker (Modules) — Production Content Engine
 // Authoritative Store: Cloudflare D1 (SQL)
@@ -46,7 +50,7 @@ function miniDeps() {
   if (__MINI_DEPS) return __MINI_DEPS;
   __MINI_DEPS = {
     loadContent: (env, ctx) => loadUserContentCacheOnly(env, ctx, makeCounters()),
-    integrity: (db) => contentCacheIntegrity(db),
+    integrity: (db) => contentCacheIntegrityCached(db),
     getBlockedMode: (env, uid, ctx) => getBlockedModeUserFast(env, uid, ctx),
     isAdmin: (env, uid) => parseAdmins(env).includes(Number(uid)),
     membershipConfigured: (env) => membershipCheckerConfigured(env),
@@ -59,7 +63,10 @@ function miniDeps() {
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, rawEnv, ctx) {
+    // Per-request view of env that also carries ctx, so low-level helpers (monitor, refresh-ahead)
+    // can defer work with ctx.waitUntil without changing hundreds of call signatures.
+    const env = withRequestCtx(rawEnv, ctx);
     const counters = makeCounters();
     const url = new URL(request.url);
 
@@ -96,12 +103,14 @@ export default {
           tg_edit: 0,
           action: "unknown"
         };
-        const ok = (tag) => {
+        const ok = (tag, webhookMethod) => {
           const tot = performance.now() - perf.t0;
           const serverTiming = `tot;dur=${tot.toFixed(1)}, tg;dur=${perf.tg_edit.toFixed(1)}, q;dur=${perf.q_wait.toFixed(1)}, blk;dur=${perf.blk.toFixed(1)}, db;dur=${perf.db.toFixed(1)}, path;dur=${perf.path.toFixed(1)}`;
           const logTag = tag || perf.action || "webhook";
           if (env.PERF_LOG === "1") console.log(`[PERF] ${logTag} | tot: ${tot.toFixed(1)}ms | tg_edit: ${perf.tg_edit.toFixed(1)}ms | q_wait: ${perf.q_wait.toFixed(1)}ms | blk: ${perf.blk.toFixed(1)}ms | db: ${perf.db.toFixed(1)}ms | d1: ${(counters && counters.d1_reads) || 0}r/${(counters && counters.d1_writes) || 0}w | kv: ${(counters && counters.kv_reads) || 0}r/${(counters && counters.kv_writes) || 0}w`);
-          return new Response('{"ok":true}', {
+          // When a Bot API method object is passed, Telegram executes it straight from this HTTP
+          // response (no extra Worker -> Telegram round trip). Otherwise the plain ack is returned.
+          return new Response(webhookMethod ? JSON.stringify(webhookMethod) : '{"ok":true}', {
             headers: {
               "content-type": "application/json",
               "Server-Timing": serverTiming
@@ -141,10 +150,12 @@ export default {
 
         // ====================================================================
         // ABSOLUTE EARLY /start PATH
-        // IMPORTANT: this runs immediately after JSON parsing and BEFORE
-        // dedup, block checks, profile sync, D1 content loading, monitor,
-        // or any other user pipeline. Only the global content-cache KV key
-        // `db` is read. No user KV keys are touched.
+        // Runs right after JSON parsing and the per-isolate duplicate-update check,
+        // BEFORE the generic user pipeline (profile sync, path persistence, D1 content
+        // loading). Order inside this path: fire-and-forget monitor -> membership gate
+        // (cached) -> published content (RAM/edge/KV, never D1) -> ban check (cached)
+        // -> welcome message. Profile/path persistence and extra welcome content run
+        // after the reply via ctx.waitUntil. No user KV keys are touched.
         // ====================================================================
         const earlyMsg = update.message || null
         const earlyText = (earlyMsg && earlyMsg.text ? String(earlyMsg.text) : '').trim()
@@ -175,7 +186,7 @@ export default {
             }, 8000)
             const appSendJson = await appSend.json().catch(() => null)
             if (appSendJson && appSendJson.ok && appSendJson.result && appSendJson.result.message_id && ctx && typeof ctx.waitUntil === 'function') {
-              ctx.waitUntil(monitorOutgoingMessages(env, appChatId, [appSendJson.result.message_id]).catch(() => {}))
+              monitorOutgoing(env, appChatId, [appSendJson.result.message_id])
             }
           } catch (e) { console.error('APP_CMD_ERROR', e && e.message ? e.message : String(e)) }
           return ok('app_cmd')
@@ -229,7 +240,7 @@ export default {
             } catch (e) {
               console.error('START_EARLY_LOAD_ERROR', e && e.message ? e.message : String(e))
             }
-            if (!startDb || !contentCacheIntegrity(startDb)) {
+            if (!startDb || !contentCacheIntegrityCached(startDb)) {
               console.error('START_EARLY_CACHE_UNAVAILABLE', JSON.stringify(contentCacheSummary(startDb)))
               return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } })
             }
@@ -303,7 +314,7 @@ export default {
                 tgJson = await res2.json().catch(() => null);
               }
               if (tgJson && tgJson.ok && tgJson.result && tgJson.result.message_id && ctx && typeof ctx.waitUntil === 'function') {
-                ctx.waitUntil(monitorOutgoingMessages(env, earlyChatId, [tgJson.result.message_id]).catch(() => {}))
+                monitorOutgoing(env, earlyChatId, [tgJson.result.message_id])
               }
               __dbg('START_EARLY_RESULT', JSON.stringify({
                 status: res.status,
@@ -1289,7 +1300,8 @@ export default {
   },
 
   // Scheduled Cron Handler (Broadcast continuations + hourly content self-healing)
-  async scheduled(event, env, ctx) {
+  async scheduled(event, rawEnv, ctx) {
+    const env = withRequestCtx(rawEnv, ctx);
     // Keep a hard safety margin under Cloudflare's external subrequest ceiling.
     // Broadcast is the only repeating Telegram workload in the scheduler.
     const CRON_TELEGRAM_BUDGET = 40;
@@ -1476,7 +1488,7 @@ async function tgSend(env, chat_id, text, extra) {
       j = await res2.json().catch(() => null);
     }
     if (!skipMonitor && !__chatIsAdmin && j && j.ok && j.result && j.result.message_id) {
-      await monitorOutgoingMessages(env, chat_id, [j.result.message_id]);
+      await monitorOutgoing(env, chat_id, [j.result.message_id]); // deferred: returns immediately inside a request
     }
     return j;
   } catch (_) { return null; }
@@ -1494,7 +1506,7 @@ async function sendLegacyMedia(env, chat_id, endpoint, field, file_id, caption, 
     const res = await tgFetchWithTimeout(TG(env) + "/" + endpoint, { method: "POST", headers: CTH, body: JSON.stringify(payload) }, 10000);
     const j = await res.json().catch(() => null);
     if (!skipMonitor && j && j.ok && j.result && j.result.message_id && !parseAdmins(env).includes(Number(chat_id))) {
-      await monitorOutgoingMessages(env, chat_id, [j.result.message_id]);
+      await monitorOutgoing(env, chat_id, [j.result.message_id]);
     }
     return j;
   } catch (_) { return null; }
@@ -1600,7 +1612,7 @@ async function tgSendMediaGroup(env, chat_id, files) {
     if (!(j && j.ok)) return false;
     const ids = Array.isArray(j.result) ? j.result.map(x => Number(x && x.message_id)).filter(Boolean) : [];
     if (ids.length && !parseAdmins(env).includes(Number(chat_id))) {
-      await monitorOutgoingMessages(env, chat_id, ids);
+      await monitorOutgoing(env, chat_id, ids);
     }
     return true;
   } catch (e) {
@@ -1622,7 +1634,7 @@ async function sendMediaItem(env, chat_id, f, extra) {
     const endpoint = kind === "photo" ? "sendPhoto" : kind === "video" ? "sendVideo" : kind === "audio" ? "sendAudio" : kind === "voice" ? "sendVoice" : kind === "sticker" ? "sendSticker" : "sendDocument";
     const j = await tgPostMedia(env, endpoint, p, 10000, "MEDIA_ITEM");
     if (!skipMonitor && j && j.ok && j.result && j.result.message_id && !parseAdmins(env).includes(Number(chat_id))) {
-      await monitorOutgoingMessages(env, chat_id, [j.result.message_id]);
+      await monitorOutgoing(env, chat_id, [j.result.message_id]);
     }
     return (j && j.ok && j.result) ? j.result.message_id : null;
   } catch (e) {
@@ -1773,8 +1785,17 @@ let GLOBAL_DB_CACHE = { value: null, expiresAt: 0 };
 // Published content is immutable between admin Save/Force Save operations.
 // Keep the isolate hot-cache short enough to prevent a stale snapshot from
 // surviving for hours, while coalescing refreshes so we do not stampede KV.
-const CACHE_TTL_MS = 20 * 1000; // published content RAM cache per isolate; admin changes should reach users quickly
-const EDGE_DB_CACHE_TTL_SEC = 20; // short cross-isolate PoP accelerator
+// Fresh window: a snapshot younger than this is served with ZERO I/O.
+// After it expires the next press is still answered instantly from RAM (stale-while-revalidate) and the
+// refresh (KV + edge) runs in the background; it is single-flight, so one refresh per isolate.
+// Admin edits are written straight to KV (and to the editing isolate's RAM + this PoP's edge copy);
+// other isolates pick them up within one fresh window (+ the refresh that the next press triggers).
+const CONTENT_CACHE_FRESH_MS = 2 * 60 * 1000;
+const CONTENT_CACHE_STALE_MAX_MS = 15 * 60 * 1000; // never serve a snapshot older than fresh + this without waiting for a refresh
+const CONTENT_REFRESH_RETRY_MS = 10 * 1000;        // after a FAILED background refresh, wait this long before trying again
+const CACHE_TTL_MS = CONTENT_CACHE_FRESH_MS;       // published content RAM cache per isolate
+const EDGE_DB_CACHE_TTL_SEC = 20; // short cross-isolate PoP accelerator (refreshes always compare it with KV and keep the newest version)
+let CONTENT_BG_RETRY_AT = 0;
 let CONTENT_LOAD_IN_FLIGHT = null; // single-flight published-content refresh
 const EDGE_BLOCK_CACHE_TTL_SEC = 60; // short-lived per-user ban cache at the edge
 const EDGE_CACHE_BASE = "https://noxgifts-fast-cache.invalid";
@@ -1859,6 +1880,8 @@ const MEMBERSHIP_EDGE_TTL_SEC = 120;
 const NONMEMBER_CACHE_TTL_MS = 10 * 1000;       // non-members: picked up quickly after they join
 const NONMEMBER_EDGE_TTL_SEC = 10;
 const MEMBERSHIP_ERROR_COOLDOWN_MS = 8 * 1000;  // Telegram error / 429: do not hammer the API
+const MEMBERSHIP_REFRESH_AHEAD_MS = 30 * 1000;  // active members are re-verified in the background during the last 30 s of their 2-minute window
+const MEMBERSHIP_BG_INFLIGHT = new Map();
 
 // A required chat means the gate is ON. A missing checker token no longer silently disables it.
 function membershipCheckerConfigured(env) {
@@ -1932,6 +1955,20 @@ function membershipRamGet(userId, chatId) {
   }
 }
 
+// Same as membershipRamGet but also exposes the expiry (used for the background refresh-ahead).
+function membershipRamEntry(userId, chatId) {
+  try {
+    const rec = getUserRecord(userId);
+    const m = rec && rec._membership;
+    if (!m) return null;
+    if (String(m.chatId) !== String(chatId)) return null;
+    if (!m.exp || Number(m.exp) <= Date.now()) return null;
+    return { value: Number(m.value) === 1 ? 1 : 0, exp: Number(m.exp) };
+  } catch (_) {
+    return null;
+  }
+}
+
 function membershipRamPut(userId, chatId, value, ttlMs) {
   try {
     setUserRecord(userId, {
@@ -1958,6 +1995,39 @@ function membershipStatusIsMember(member) {
   return false;
 }
 
+// Background membership re-check. It only ever REPLACES the cached value with a definite answer from Telegram;
+// on any error it changes nothing (no error cooldown), so a hiccup can never lock out a valid member.
+function scheduleMembershipRefresh(env, uid, chatId) {
+  try {
+    const ctx = reqCtx(env);
+    if (!ctx || !env.MEMBERSHIP_BOT_TOKEN) return;
+    const key = String(chatId) + ":" + String(uid);
+    if (MEMBERSHIP_BG_INFLIGHT.has(key)) return;
+    const p = (async () => {
+      try {
+        const res = await tgFetchWithTimeout(
+          "https://api.telegram.org/bot" + env.MEMBERSHIP_BOT_TOKEN + "/getChatMember",
+          { method: "POST", headers: CTH, body: JSON.stringify({ chat_id: chatId, user_id: uid }) },
+          7000
+        );
+        const j = await res.json().catch(() => null);
+        if (j && !j.ok && membershipErrorMeansNotMember(j.description)) {
+          membershipRamPut(uid, chatId, 0, NONMEMBER_CACHE_TTL_MS);
+          await membershipEdgePut(chatId, uid, 0, NONMEMBER_EDGE_TTL_SEC);
+          return;
+        }
+        if (!j || !j.ok || !j.result) return;
+        const member = membershipStatusIsMember(j.result);
+        membershipRamPut(uid, chatId, member ? 1 : 0, member ? MEMBERSHIP_CACHE_TTL_MS : NONMEMBER_CACHE_TTL_MS);
+        await membershipEdgePut(chatId, uid, member ? 1 : 0, member ? MEMBERSHIP_EDGE_TTL_SEC : NONMEMBER_EDGE_TTL_SEC);
+      } catch (_) {}
+    })();
+    MEMBERSHIP_BG_INFLIGHT.set(key, p);
+    p.then(() => { MEMBERSHIP_BG_INFLIGHT.delete(key); });
+    ctx.waitUntil(p);
+  } catch (_) {}
+}
+
 async function checkRequiredMembership(env, userId, options) {
   const uid = Number(userId);
   const chatId = normalizeRequiredChatId(env);
@@ -1979,8 +2049,15 @@ async function checkRequiredMembership(env, userId, options) {
         return { configured: true, ok: false, member: false, error: "cooldown" };
       }
     } catch (_) {}
-    const ram = membershipRamGet(uid, chatId);
-    if (ram !== null) return { configured: true, ok: true, member: ram === 1 };
+    const ramE = membershipRamEntry(uid, chatId);
+    if (ramE) {
+      // Refresh-ahead: the rule is unchanged (a member is re-checked every 2 minutes) but the re-check for an
+      // ACTIVE member now runs in the background just before expiry, so no press ever waits for getChatMember.
+      if (ramE.value === 1 && (ramE.exp - Date.now()) < MEMBERSHIP_REFRESH_AHEAD_MS) {
+        scheduleMembershipRefresh(env, uid, chatId);
+      }
+      return { configured: true, ok: true, member: ramE.value === 1 };
+    }
 
     const edge = await membershipEdgeGet(chatId, uid);
     if (edge !== null) {
@@ -2045,7 +2122,7 @@ function makeSummary(pend) {
 
 const MEM = {
   users: new Map(),
-  ttlMs: CACHE_TTL_MS,
+  ttlMs: 20 * 1000, // generic short-lived RAM cache (independent from the published-content window above)
   pathTtlMs: 60 * 1000, // short RAM TTL: another isolate may have advanced the durable path (D1 is re-read after 60 s)
   paths: new Map(),
 };
@@ -2351,6 +2428,27 @@ async function d1SyncUserProfile(env, tgFrom, msg, counters, ctx) {
 // A D1 error fails OPEN for this request only and is NEVER cached, so a transient
 // outage cannot grant a banned user a 2-minute pass.
 const BLOCK_RAM_TTL_MS = 120 * 1000;
+const BLOCK_REFRESH_AHEAD_MS = 30 * 1000; // active users: the ban lookup is re-run in the background during the last 30 s of the window
+const BLOCK_BG_INFLIGHT = new Map();
+// Authoritative D1 point read in the background. On any error nothing is changed (fail-safe, never cached).
+function scheduleBlockRefresh(env, numId) {
+  try {
+    const ctx = reqCtx(env);
+    if (!ctx || !env || !env.SQL) return;
+    if (BLOCK_BG_INFLIGHT.has(numId)) return;
+    const p = (async () => {
+      try {
+        const row = await env.SQL.prepare("SELECT is_blocked FROM users WHERE user_id=?1").bind(numId).first();
+        const val = (row && row.is_blocked != null) ? (Number(row.is_blocked) || 0) : 0;
+        setUserRecord(numId, { _blk: { val, exp: Date.now() + BLOCK_RAM_TTL_MS } }, BLOCK_RAM_TTL_MS);
+        await edgeBlockPut(numId, val);
+      } catch (_) {}
+    })();
+    BLOCK_BG_INFLIGHT.set(numId, p);
+    p.then(() => { BLOCK_BG_INFLIGHT.delete(numId); });
+    ctx.waitUntil(p);
+  } catch (_) {}
+}
 async function getBlockedModeCached(env, user_id, ctx) {
   return await getBlockedModeUserFast(env, user_id, ctx);
 }
@@ -2581,6 +2679,17 @@ function contentCacheIntegrity(db) {
   return true;
 }
 
+// The integrity scan walks every node of the tree. Published snapshots are immutable once cached,
+// so a snapshot that already passed is remembered (WeakSet) and later requests skip the scan.
+const __INTEGRITY_OK = new WeakSet();
+function contentCacheIntegrityCached(db) {
+  if (!db || typeof db !== "object") return false;
+  if (__INTEGRITY_OK.has(db)) return true;
+  const good = contentCacheIntegrity(db);
+  if (good) __INTEGRITY_OK.add(db);
+  return good;
+}
+
 function contentCacheSummary(db) {
   if (!db || !db.nodes) return { nodes: 0, links: 0, root_id: null, root_links: 0, version: 0 };
   const rootId = Number(db.root_id) || 1;
@@ -2667,22 +2776,123 @@ async function refreshPublishedContentFromGlobalCache(env, ctx = null, counters 
   return null;
 }
 
+// Single-flight refresh of the published snapshot from KV + edge cache (never from D1).
+function startContentRefresh(env, ctx, counters) {
+  if (CONTENT_LOAD_IN_FLIGHT) return { promise: CONTENT_LOAD_IN_FLIGHT, started: false };
+
+  const p = (async () => {
+    KV_CACHE_STATS.db_misses++;
+
+    let kvVal = null;
+    let edgeVal = null;
+    let kvError = null;
+
+    // Refresh both accelerators in parallel. There is still only one KV read
+    // per active isolate/cache-refresh window, and the higher valid version wins.
+    const kvPromise = (env && env.DB && typeof env.DB.get === "function")
+      ? (async () => {
+          try {
+            bump(counters, "kv_reads");
+            const raw = await env.DB.get(DB_KEY);
+            if (!raw) return null;
+            try { return JSON.parse(raw); } catch (_) { return null; }
+          } catch (e) {
+            kvError = e;
+            return null;
+          }
+        })()
+      : Promise.resolve(null);
+
+    const edgePromise = edgeDbGet().catch(() => null);
+    [kvVal, edgeVal] = await Promise.all([kvPromise, edgePromise]);
+
+    const validKv = contentCacheIntegrity(kvVal);
+    const validEdge = edgeVal && typeof edgeVal === "object" && contentCacheIntegrity(edgeVal);
+
+    if (validKv || validEdge) {
+      if (kvVal && validKv) kvVal._v = Number(kvVal._v) || 0;
+      if (edgeVal && validEdge) edgeVal._v = Number(edgeVal._v) || 0;
+
+      // Prefer the newest valid snapshot. If versions tie, prefer KV because
+      // it is the published content source rather than a regional accelerator.
+      let chosen = validKv && (!validEdge || Number(kvVal._v || 0) >= Number(edgeVal._v || 0))
+        ? kvVal
+        : edgeVal;
+
+      chosen = setPublishedRamCache(chosen) || chosen;
+      if (validEdge && chosen === edgeVal) {
+        // Keep the selected snapshot available at this PoP for the next refresh.
+        try { if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(edgeDbPut(env, edgeVal).catch(() => {})); } catch (_) {}
+      }
+      if (kvError) console.warn("CONTENT_CACHE_KV_READ_ERROR:", kvError && kvError.message ? kvError.message : String(kvError));
+      return chosen;
+    }
+
+    // Primary KV snapshot invalid/missing: use the last-known-good backup before
+    // giving up. This is still KV-only and does not scan/rebuild from D1.
+    try {
+      if (env && env.DB && typeof env.DB.get === "function") {
+        bump(counters, "kv_reads");
+        const backupRaw = await env.DB.get("db:backup:last");
+        let backupVal = backupRaw ? JSON.parse(backupRaw) : null;
+        if (contentCacheIntegrity(backupVal)) {
+          backupVal._v = Number(backupVal._v) || 0;
+          backupVal = setPublishedRamCache(backupVal) || backupVal;
+          console.warn("CONTENT_CACHE_PRIMARY_INVALID_USING_BACKUP", JSON.stringify(contentCacheSummary(backupVal)));
+          return backupVal;
+        }
+      }
+    } catch (_) {}
+
+    console.error("USER_CONTENT_CACHE_INVALID");
+    return null;
+  })();
+
+  CONTENT_LOAD_IN_FLIGHT = p;
+  // Clear the single-flight slot when this very refresh is done (never clear a newer one).
+  p.then(() => {}, () => {}).then(() => { if (CONTENT_LOAD_IN_FLIGHT === p) CONTENT_LOAD_IN_FLIGHT = null; });
+  return { promise: p, started: true };
+}
+
 async function loadUserContentCacheOnly(env, ctx, counters, options = {}) {
   const forceRefresh = !!(options && options.forceRefresh);
   // USER HOT PATH: RAM -> (KV + Cache API) -> backup fallback.
   // IMPORTANT: NEVER reconstruct the full published tree from D1 here.
-  // The short RAM TTL bounds staleness, while the single-flight promise prevents
-  // concurrent requests from generating a KV read storm when an isolate refreshes.
-  if (!forceRefresh && GLOBAL_DB_CACHE.value && GLOBAL_DB_CACHE.expiresAt > now()) {
-    if (contentCacheIntegrity(GLOBAL_DB_CACHE.value)) {
+  // 1) Fresh RAM snapshot  -> returned immediately, no I/O.
+  // 2) Expired but recent  -> returned immediately too (stale-while-revalidate); a single-flight
+  //                           background refresh updates RAM for the following presses.
+  // 3) Nothing usable      -> the caller waits for the (single-flight) refresh.
+  const bgCtx = ctx || reqCtx(env);
+  if (!forceRefresh && GLOBAL_DB_CACHE.value) {
+    const t = now();
+    const snap = GLOBAL_DB_CACHE.value;
+    if (GLOBAL_DB_CACHE.expiresAt > t) {
+      if (contentCacheIntegrityCached(snap)) {
+        KV_CACHE_STATS.db_hits++;
+        return snap;
+      }
+      try {
+        const invalidSummary = contentCacheSummary(snap);
+        GLOBAL_DB_CACHE = { value: null, expiresAt: 0 };
+        console.warn("CONTENT_CACHE_RAM_INVALID", JSON.stringify(invalidSummary));
+      } catch (_) {}
+    } else if (bgCtx && (t - GLOBAL_DB_CACHE.expiresAt) < CONTENT_CACHE_STALE_MAX_MS && contentCacheIntegrityCached(snap)) {
       KV_CACHE_STATS.db_hits++;
-      return GLOBAL_DB_CACHE.value;
+      if (t >= CONTENT_BG_RETRY_AT) {
+        const r = startContentRefresh(env, ctx, counters);
+        if (r.started) {
+          const tracked = r.promise.then(
+            (fresh) => { if (!fresh) CONTENT_BG_RETRY_AT = now() + CONTENT_REFRESH_RETRY_MS; },
+            (err) => {
+              CONTENT_BG_RETRY_AT = now() + CONTENT_REFRESH_RETRY_MS;
+              console.error("CONTENT_BG_REFRESH_ERROR:", err && err.message ? err.message : String(err));
+            }
+          );
+          try { bgCtx.waitUntil(tracked); } catch (_) {}
+        }
+      }
+      return snap;
     }
-    try {
-      const invalidSummary = contentCacheSummary(GLOBAL_DB_CACHE.value);
-      GLOBAL_DB_CACHE = { value: null, expiresAt: 0 };
-      console.warn("CONTENT_CACHE_RAM_INVALID", JSON.stringify(invalidSummary));
-    } catch (_) {}
   }
 
   if (!forceRefresh && CONTENT_LOAD_IN_FLIGHT) return CONTENT_LOAD_IN_FLIGHT;
@@ -2692,79 +2902,7 @@ async function loadUserContentCacheOnly(env, ctx, counters, options = {}) {
     if (fresh) return fresh;
   }
 
-  CONTENT_LOAD_IN_FLIGHT = (async () => {
-    try {
-      KV_CACHE_STATS.db_misses++;
-
-      let kvVal = null;
-      let edgeVal = null;
-      let kvError = null;
-
-      // Refresh both accelerators in parallel. There is still only one KV read
-      // per active isolate/cache-refresh window, and the higher valid version wins.
-      const kvPromise = (env && env.DB && typeof env.DB.get === "function")
-        ? (async () => {
-            try {
-              bump(counters, "kv_reads");
-              const raw = await env.DB.get(DB_KEY);
-              if (!raw) return null;
-              try { return JSON.parse(raw); } catch (_) { return null; }
-            } catch (e) {
-              kvError = e;
-              return null;
-            }
-          })()
-        : Promise.resolve(null);
-
-      const edgePromise = edgeDbGet().catch(() => null);
-      [kvVal, edgeVal] = await Promise.all([kvPromise, edgePromise]);
-
-      const validKv = contentCacheIntegrity(kvVal);
-      const validEdge = edgeVal && typeof edgeVal === "object" && contentCacheIntegrity(edgeVal);
-
-      if (validKv || validEdge) {
-        if (kvVal && validKv) kvVal._v = Number(kvVal._v) || 0;
-        if (edgeVal && validEdge) edgeVal._v = Number(edgeVal._v) || 0;
-
-        // Prefer the newest valid snapshot. If versions tie, prefer KV because
-        // it is the published content source rather than a regional accelerator.
-        let chosen = validKv && (!validEdge || Number(kvVal._v || 0) >= Number(edgeVal._v || 0))
-          ? kvVal
-          : edgeVal;
-
-        chosen = setPublishedRamCache(chosen) || chosen;
-        if (validEdge && chosen === edgeVal) {
-          // Keep the selected snapshot available at this PoP for the next refresh.
-          try { if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(edgeDbPut(env, edgeVal).catch(() => {})); } catch (_) {}
-        }
-        if (kvError) console.warn("CONTENT_CACHE_KV_READ_ERROR:", kvError && kvError.message ? kvError.message : String(kvError));
-        return chosen;
-      }
-
-      // Primary KV snapshot invalid/missing: use the last-known-good backup before
-      // giving up. This is still KV-only and does not scan/rebuild from D1.
-      try {
-        if (env && env.DB && typeof env.DB.get === "function") {
-          bump(counters, "kv_reads");
-          const backupRaw = await env.DB.get("db:backup:last");
-          let backupVal = backupRaw ? JSON.parse(backupRaw) : null;
-          if (contentCacheIntegrity(backupVal)) {
-            backupVal._v = Number(backupVal._v) || 0;
-            backupVal = setPublishedRamCache(backupVal) || backupVal;
-            console.warn("CONTENT_CACHE_PRIMARY_INVALID_USING_BACKUP", JSON.stringify(contentCacheSummary(backupVal)));
-            return backupVal;
-          }
-        }
-      } catch (_) {}
-
-      console.error("USER_CONTENT_CACHE_INVALID");
-      return null;
-    } finally {
-      CONTENT_LOAD_IN_FLIGHT = null;
-    }
-  })();
-
-  return CONTENT_LOAD_IN_FLIGHT;
+  return startContentRefresh(env, ctx, counters).promise;
 }
 
 async function getBlockedModeUserFast(env, userId, ctx) {
@@ -2773,7 +2911,10 @@ async function getBlockedModeUserFast(env, userId, ctx) {
 
   try {
     const rec = getUserRecord(numId);
-    if (rec && rec._blk && rec._blk.exp > Date.now()) return Number(rec._blk.val) || 0;
+    if (rec && rec._blk && rec._blk.exp > Date.now()) {
+      if ((rec._blk.exp - Date.now()) < BLOCK_REFRESH_AHEAD_MS) scheduleBlockRefresh(env, numId);
+      return Number(rec._blk.val) || 0;
+    }
   } catch (_) {}
 
   try {
@@ -2882,19 +3023,18 @@ async function handleFastUserInlineCallback({ env, ctx, update, cq, chatId, from
 
     if (isObsoleteClick(cqChatId, updateId)) return null;
 
-    // CRITICAL LATENCY OPTIMIZATION:
-    // The Worker is itself being called by Telegram's webhook server. Telegram's
-    // Bot API officially supports returning a Bot API method directly in the
-    // webhook HTTP response. That removes a second outbound Worker -> Telegram
-    // round-trip for the menu edit and lets Telegram execute editMessageText
-    // immediately after accepting this webhook response.
-    // We intentionally do NOT await editMessageText here because there is no
-    // result available to the webhook handler in this mode.
+    // CRITICAL LATENCY OPTIMIZATION (the code now really does what this comment says):
+    // The Worker is itself being called by Telegram's webhook server, and the Bot API officially
+    // supports answering a webhook with a Bot API method in the HTTP response body. So the menu edit
+    // is NOT sent as a second Worker -> Telegram request: it is returned as `{method:"editMessageText",...}`
+    // and Telegram executes it right after receiving this response. That removes one full outbound
+    // round trip from every inline navigation press. There is no result to read in this mode, which
+    // is fine: the previous code only logged a failed edit and never retried it.
     perf.q_wait = 0;
     perf.tg_edit = 0;
 
-
-    // Media never blocks the first visible menu edit.
+    // Media never blocks the first visible menu edit: it is sent in the background, in order.
+    // (sendMediaItem's monitor forward is deferred too, so files are not delayed by it.)
     const files = (targetNode && targetNode.files) || [];
     if (files.length && ctx && typeof ctx.waitUntil === "function") {
       ctx.waitUntil((async () => {
@@ -2907,14 +3047,18 @@ async function handleFastUserInlineCallback({ env, ctx, update, cq, chatId, from
       })());
     }
 
-    const edited = await tgEditMessageText(
-      env, cqChatId, cqMsgId, fullText || getWelcome(db), { reply_markup: kb }
-    );
-    if (!edited) {
+    if (cqChatId == null || cqMsgId == null) {
       console.error("FAST_EDIT_FAILED", JSON.stringify({ chat_id: cqChatId, message_id: cqMsgId }));
+      return ok("fast_edit_failed");
     }
     perf.tg_edit = performance.now() - dbStart;
-    return ok(edited ? "fast_edit" : "fast_edit_failed");
+    return ok("fast_edit", {
+      method: "editMessageText",
+      chat_id: cqChatId,
+      message_id: cqMsgId,
+      text: String(fullText || getWelcome(db) || ""),
+      reply_markup: kb
+    });
   };
 
   try {
@@ -8436,9 +8580,63 @@ async function tgForward(env, to_chat_id, from_chat_id, message_id) {
   } catch (_) {}
 }
 
+// ---------------------------------------------------------------------------
+// Request context carried by env.
+// fetch()/scheduled() hand every helper a per-request view of env that also holds ctx, so
+// deep helpers (monitor, refresh-ahead) can use ctx.waitUntil without new parameters.
+// ---------------------------------------------------------------------------
+const REQ_CTX = Symbol.for("bot.requestCtx");
+function withRequestCtx(rawEnv, ctx) {
+  try {
+    if (!rawEnv || !ctx || typeof ctx.waitUntil !== "function") return rawEnv;
+    const e = Object.create(rawEnv);
+    Object.defineProperty(e, REQ_CTX, { value: ctx, enumerable: false });
+    return e;
+  } catch (_) { return rawEnv; }
+}
+function reqCtx(env) {
+  try {
+    const c = env && env[REQ_CTX];
+    return c && typeof c.waitUntil === "function" ? c : null;
+  } catch (_) { return null; }
+}
+
+// Non-blocking outgoing monitor.
+// The forward to the monitor admin NEVER sits on the user's reply path: it is queued and kept alive
+// with ctx.waitUntil. Forwards of the same chat are chained, so the admin still sees them in the exact
+// order the user received them. Without a ctx (should not happen) it falls back to the old awaited
+// behaviour so nothing is ever dropped.
+// Master switch for chat-activity monitoring (forwarding user messages, button presses and bot replies
+// to the monitor admin). OFF by design: only Mini App opens are monitored. Set to true to bring it back.
+const MONITOR_CHAT_ACTIVITY = false;
+
+const MON_CHAINS = new Map();
+function monitorOutgoing(env, sourceChatId, messageIds) {
+  try {
+    if (!MONITOR_CHAT_ACTIVITY) return;
+    if (!isMonitorEnabled(env)) return;
+    const monitorAdminId = getMonitorAdminId(env);
+    const sourceId = Number(sourceChatId) || 0;
+    if (!monitorAdminId || !sourceId || sourceId === Number(monitorAdminId)) return;
+    if (parseAdmins(env).includes(sourceId)) return;
+
+    const key = String(sourceId);
+    const run = () => monitorOutgoingMessages(env, sourceId, messageIds);
+    const prev = MON_CHAINS.get(key);
+    const next = (prev ? prev.then(run, run) : run()).catch(() => {});
+    MON_CHAINS.set(key, next);
+    next.then(() => { if (MON_CHAINS.get(key) === next) MON_CHAINS.delete(key); });
+
+    const ctx = reqCtx(env);
+    if (ctx) { ctx.waitUntil(next); return; }
+    return next;
+  } catch (_) {}
+}
+
 // Outgoing monitoring is server-side only: it uses Telegram forwarding/copying and NEVER
 // touches D1 or KV. Single messages use forwardMessage; albums are batched into one
 // forwardMessages call so one 10-item album costs one monitor API call, not ten.
+// Callers on the reply path use monitorOutgoing() above, never this function directly.
 async function monitorOutgoingMessages(env, sourceChatId, messageIds) {
   try {
     if (!isMonitorEnabled(env)) return;
@@ -8479,7 +8677,9 @@ function isMonitorEnabled(env) {
 }
 
 // Mini App open monitoring is intentionally Worker-side only. It does not touch D1/KV.
-// Every successful Mini App authorization is reported immediately.
+// Every successful Mini App authorization is reported. The caller runs it inside ctx.waitUntil,
+// so the notice never delays the Mini App response. The message goes straight to the monitor admin
+// and carries everything needed to identify the person and jump to their profile.
 async function monitorMiniAppOpen(env, user) {
   try {
     if (!isMonitorEnabled(env)) return;
@@ -8506,20 +8706,23 @@ async function monitorMiniAppOpen(env, user) {
     }).format(new Date(now));
 
     // Make each identifier independently clickable:
-    //   - ID opens the Telegram profile directly by numeric Telegram user ID.
-    //   - Username opens the public Telegram profile by @username when available.
+    //   - The name and the ID open the Telegram profile directly by numeric Telegram user ID.
+    //   - The username opens the public Telegram profile by @username when available.
     const safeName = htmlEscape(name);
     const safeUsername = rawUsername ? htmlEscape(username) : "-";
     const idLink = `<a href="tg://user?id=${uid}">${uid}</a>`;
+    const nameLink = `<a href="tg://user?id=${uid}">${safeName}</a>`;
     const usernameLink = rawUsername
       ? `<a href="https://t.me/${encodeURIComponent(rawUsername)}">${safeUsername}</a>`
       : "-";
+    const lang = user && user.language_code ? htmlEscape(String(user.language_code)) : "";
 
     const text =
       `📱 <b>Mini App Opened</b>\n` +
-      `User: ${safeName}\n` +
+      `User: ${nameLink}\n` +
       `ID: ${idLink}\n` +
       `Username: ${usernameLink}\n` +
+      (lang ? `Language: ${lang}${user && user.is_premium ? " · Premium ⭐" : ""}\n` : "") +
       `Time: ${htmlEscape(time)}`;
 
     // Send directly to the monitoring admin so this remains a dedicated monitor event,
@@ -8527,7 +8730,7 @@ async function monitorMiniAppOpen(env, user) {
     await tgFetchWithTimeout(TG(env) + "/sendMessage", {
       method: "POST",
       headers: CTH,
-      body: JSON.stringify({ chat_id: monitorAdminId, text, parse_mode: "HTML" })
+      body: JSON.stringify({ chat_id: monitorAdminId, text, parse_mode: "HTML", disable_web_page_preview: true })
     }, 10000);
   } catch (e) {
     console.error("MINIAPP_OPEN_MONITOR_ERROR", e && e.message ? e.message : String(e));
@@ -8539,6 +8742,7 @@ async function monitorMiniAppOpen(env, user) {
 // Nothing here uses D1/KV for monitoring.
 function queueMonitorUpdate(env, ctx, update, msg, from, chatId) {
   try {
+    if (!MONITOR_CHAT_ACTIVITY) return; // only Mini App opens are monitored
     if (!isMonitorEnabled(env) || !ctx || typeof ctx.waitUntil !== "function") return;
 
     const monitorAdminId = getMonitorAdminId(env);

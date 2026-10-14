@@ -208,14 +208,19 @@ async function authorize(request, env, ctx, deps) {
   const user = v.user;
   const uid = Number(user.id);
 
-  let blocked = 0;
-  try { blocked = await deps.getBlockedMode(env, uid, ctx); } catch (_) {}
-  if (blocked) return { res: jsonRes({ ok: false, error: "banned" }, 403) };
-
+  // The ban lookup and the membership check are independent, so they run in parallel (one network wait
+  // instead of two on a cold cache). Decision order is unchanged: banned first, then membership.
   const isAdmin = deps.isAdmin(env, uid);
-  if (!isAdmin && deps.membershipConfigured(env)) {
-    const m = await deps.checkMembership(env, uid);
-    if (!m.ok) return { res: jsonRes({ ok: false, error: "membership_unavailable" }, 503) };
+  const needMembership = !isAdmin && deps.membershipConfigured(env);
+  const [blocked, m] = await Promise.all([
+    Promise.resolve().then(() => deps.getBlockedMode(env, uid, ctx)).catch(() => 0),
+    needMembership
+      ? Promise.resolve().then(() => deps.checkMembership(env, uid)).catch(() => ({ ok: false }))
+      : Promise.resolve(null)
+  ]);
+  if (blocked) return { res: jsonRes({ ok: false, error: "banned" }, 403) };
+  if (needMembership) {
+    if (!m || !m.ok) return { res: jsonRes({ ok: false, error: "membership_unavailable" }, 503) };
     if (!m.member) return { res: jsonRes({ ok: false, error: "not_member" }, 403) };
   }
   return { user, uid, isAdmin };
