@@ -958,12 +958,12 @@ export function groupResults(matches, q, ctx, cfgIn) {
 //     Stored by the bot as one small JSON document and shipped to the Mini App with the content.
 //     The built-in registry above is the DEFAULT; overrides only ever sit on top of it:
 //       { v:1, rev, fields:{ key:{label?,chip?,filter?,filterOrder?,words?,kind?,max?} },
-//         card:[keys, max 5], cardStyle:"full"|"short"|"labeled" }
+//         card:[keys, any number], cardStyle:"full"|"short"|"labeled" }
 //     Rules: a built-in field may be relabelled / reordered / hidden from filters, but its kind and
 //     dictionary never change; a NEW field is text or number only; keys follow the registry-key rule.
 //     Stored values never depend on any of this (metadata keeps its own canonical order).
 // ============================================================================
-export const MAX_CARD_FIELDS = 5;
+export const MAX_CARD_FIELDS = 40;          // technical sanity bound only (a file holds at most 16 fields); not a design limit
 export const CARD_STYLES = ["full", "short", "labeled"];
 const OV_KEY = /^[a-z][a-z0-9_]{0,23}$/;
 const OV_MAX_FIELDS = 24;
@@ -1006,7 +1006,7 @@ export function sanitizeOverrides(raw, baseCfg) {
   for (const k of card) {
     const key = String(k).toLowerCase();
     if (!OV_KEY.test(key) || seen.has(key)) continue;
-    if (ov.card.length >= MAX_CARD_FIELDS) { warnings.push(`only ${MAX_CARD_FIELDS} fields fit on a card; "${key}" was dropped`); break; }
+    if (ov.card.length >= MAX_CARD_FIELDS) { warnings.push(`too many card fields; "${key}" was dropped`); break; }
     seen.add(key); ov.card.push(key);
   }
   ov.cardStyle = CARD_STYLES.includes(raw.cardStyle) ? raw.cardStyle : "full";
@@ -1051,7 +1051,7 @@ export function applyOverrides(baseCfg, ovIn) {
 
 export const defaultConfig = () => DEFAULT_CFG;
 
-// The chips shown side by side on a result card, in the admin's order (max 5). Only fields the file has.
+// The chips shown side by side on a result card, in the admin's order (any number). Only fields the file has.
 export function cardChips(meta, cfgIn) {
   const c = compile(cfgIn);
   const d = c.cfg.display || {};
