@@ -40,7 +40,7 @@
 import { handleMiniApi } from "./miniapp-api.js";
 import {
   parseAdminSearchInput, normalizeSearchMeta, serializeSearchMeta, describeMeta, shortMeta, codesHelpText,
-  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, cardChips, MAX_CARD_FIELDS, CARD_STYLES
+  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, filterColumns, DEFAULT_FILTER_COLS, MAX_FILTER_COLS, isDefaultOverrides
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -3884,7 +3884,7 @@ function __searchMetaParse(text) {
 // ---------------------------------------------------------------------------
 const SEARCH_CFG_TTL_MS = 30000;
 let SEARCH_CFG_STATE = { ov: null, rev: 0, cfg: defaultConfig(), at: 0, empty: true };
-function __searchCfgIsEmpty(ov) { return !ov || (!Object.keys(ov.fields || {}).length && !(ov.card || []).length && (ov.cardStyle || "full") === "full"); }
+function __searchCfgIsEmpty(ov) { return isDefaultOverrides(ov, defaultConfig()); }
 function __searchCfgBuild(raw, rev) {
   const { ov, warnings } = sanitizeOverrides(raw, defaultConfig());
   ov.rev = Number(rev) || 0;
@@ -5850,7 +5850,7 @@ function __contentAdminMenuKb(db, node, hasDraft, hasConflict = false) {
     rows.push([{ text: "👥 Users", callback_data: "A|USERS|1" }]);
     rows.push([{ text: "📈 Statistics", callback_data: "A|STAT" }]);
     rows.push([{ text: "📊 Polls", callback_data: "A|POLL_LIST|1" }]);
-    rows.push([{ text: "⚙️ Welcome Settings", callback_data: "A|WELCOME" }, { text: "🔎 Search fields", callback_data: "A|SF" }]);
+    rows.push([{ text: "⚙️ Welcome Settings", callback_data: "A|WELCOME" }, { text: "🔎 فلاتر البحث", callback_data: "A|SF" }]);
     rows.push([{ text: "📣 Broadcast", callback_data: "A|BC_MENU" }]);
   }
 
@@ -7388,39 +7388,35 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
 }
 
 /* ============================================================================
-   SEARCH FIELDS — admin management (display + order), fully from the bot
+   SEARCH FILTERS — admin management from the bot (Arabic, one main screen)
    ----------------------------------------------------------------------------
-   Everything an admin can tune about how the structured search looks:
-     🧩 Card layout   any number of fields shown side by side on every file card, in the chosen order
-                      (+ style: full / short / labeled)
-     📋 Filters order the order of the dependent filter chain, and which fields have a filter
-     🏷 Fields        rename a label, set the words people can type, add or remove a custom field
-   Settings live in the search_config table (see __searchCfgSave) — not in the content draft — and take
-   effect immediately for the bot and within ~30 s for the Mini App. Stored file metadata is never touched.
+   What the admin controls is how the filter panel of the Mini App looks:
+     • the ORDER of the filters (⬆️⬇️) and which ones are shown (👁/🙈)
+     • how many filters sit side by side in a row (1 – 8)
+     • each filter's name, the words that find it in the search box, and extra (custom) filters
+   Settings live in the search_config table (see __searchCfgSave) — not in the content draft — and apply at once
+   to the bot and within ~30 s to the Mini App. Stored file metadata is never touched.
    ============================================================================ */
-const __SF_STYLE_LABEL = { full: "Full (Managerial Accounting · Lecture · #2)", short: "Short (MA · LEC · 2)", labeled: "Labeled (Subject: MA)" };
+const __SF_NUM = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
+const __sfN = (i) => __SF_NUM[i] || String(i) + ".";
 
 async function __sfRaw(env) {
   const st = await __searchCfgLoad(env, true);
-  const raw = st.ov ? JSON.parse(JSON.stringify(st.ov)) : { v: 1, rev: 0, fields: {}, card: [], cardStyle: "full" };
-  raw.fields = raw.fields || {}; raw.card = raw.card || []; raw.cardStyle = raw.cardStyle || "full";
+  const raw = st.ov ? JSON.parse(JSON.stringify(st.ov)) : { v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, fields: {} };
+  raw.fields = raw.fields || {}; raw.cols = raw.cols || DEFAULT_FILTER_COLS;
   return raw;
 }
-// keys that exist in the stored files (including ones nobody registered) + the richest sample
+// keys that exist in the stored files (including ones nobody registered)
 async function __sfSeen(env, adminId) {
   const keys = new Set();
-  let sample = null, best = 0;
   try {
     const st = await __contentGetWorkingDraft(env, adminId, { fresh: false });
     for (const n of Object.values(st.db.nodes || {})) for (const f of (n.files || [])) {
       const m = f && f.search_meta;
-      if (!m || typeof m !== "object") continue;
-      const ks = Object.keys(m);
-      for (const k of ks) keys.add(k);
-      if (ks.length > best) { best = ks.length; sample = m; }
+      if (m && typeof m === "object") for (const k of Object.keys(m)) keys.add(k);
     }
   } catch (_) {}
-  return { keys: [...keys], sample };
+  return { keys: [...keys] };
 }
 function __sfCtx(raw, seenKeys) {
   const cfg = applyOverrides(defaultConfig(), raw);
@@ -7428,97 +7424,66 @@ function __sfCtx(raw, seenKeys) {
   const entries = [{ meta: Object.fromEntries(seenKeys.map((k) => [k, 1])) }];
   const visible = filterFieldOrder(entries, cfg).filter((k) => all.includes(k));
   const hidden = all.filter((k) => !visible.includes(k));
-  return { cfg, all, visible, hidden, label: (k) => fieldLabel(k, cfg) };
+  return { cfg, all, visible, hidden, cols: filterColumns(cfg), label: (k) => fieldLabel(k, cfg) };
 }
-async function __sfSave(env, raw) {
-  const st = await __searchCfgSave(env, raw);
-  return st;
-}
+const __sfSave = (env, raw) => __searchCfgSave(env, raw);
 const __sfKb = (rows) => ({ inline_keyboard: rows });
-const __sfPairs = (btns) => { const rows = []; for (let i = 0; i < btns.length; i += 2) rows.push(btns.slice(i, i + 2)); return rows; };
+
+// the same grid the Mini App draws, as text: "① المستوى   ② الترم   ③ المادة"
+function __sfPreview(cx) {
+  if (!cx.visible.length) return "(لا توجد فلاتر ظاهرة)";
+  const lines = [];
+  for (let i = 0; i < cx.visible.length; i += cx.cols) {
+    lines.push(cx.visible.slice(i, i + cx.cols).map((k, j) => __sfN(i + j + 1) + " " + cx.label(k)).join("    "));
+  }
+  return lines.join("\n");
+}
 
 async function __sfShowMain(env, adminId, note) {
   const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
-  const chips = (raw.card || []).map((k) => cx.label(k)).join("  |  ") || "— (none)";
-  const order = cx.visible.map((k) => cx.label(k)).join(" → ") || "—";
   const text = (note ? note + "\n\n" : "") +
-    "🔎 Search fields\n\n" +
-    "🧩 Card (side by side): " + chips + "\n" +
-    "🎨 Card style: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle) + "\n" +
-    "📋 Filters order: " + order + (cx.hidden.length ? "\n🙈 No filter: " + cx.hidden.map(cx.label).join(", ") : "") + "\n\n" +
-    "Changes apply immediately (the Mini App refreshes within ~30 seconds). File metadata is never changed here.";
-  await tgSend(env, adminId, text, { reply_markup: __sfKb([
-    [{ text: "🧩 Card layout", callback_data: "A|SF_CARD" }, { text: "📋 Filters order", callback_data: "A|SF_FIL" }],
-    [{ text: "🏷 Fields & labels", callback_data: "A|SF_FLD" }, { text: "➕ Add field", callback_data: "A|SF_ADD" }],
-    [{ text: "🔄 Reset to defaults", callback_data: "A|SF_RESET" }],
-    [{ text: "⬅️ Back to Main Menu", callback_data: "A|HOME" }]
-  ]) });
-}
-
-async function __sfShowCard(env, adminId, note) {
-  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
-  const sampleMeta = seen.sample || { s: "MA", t: "LEC", n: 2, l: 3, sem: 1 };
-  const prev = cardChips(sampleMeta, cx.cfg).map((c) => c.text).join("  |  ") || "(nothing on the card)";
-  const on = raw.card || [];
-  const rows = __sfPairs(cx.all.map((k) => ({ text: (on.includes(k) ? "☑ " : "☐ ") + cx.label(k), callback_data: "A|SF_CT|" + k })));
-  on.forEach((k, i) => {
-    rows.push([
-      { text: (i + 1) + ". " + cx.label(k) + "  ⬆️", callback_data: "A|SF_CU|" + k },
-      { text: "⬇️", callback_data: "A|SF_CD|" + k }
-    ]);
-  });
-  rows.push([{ text: "🎨 Style: " + (raw.cardStyle || "full"), callback_data: "A|SF_ST" }]);
-  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
-  await tgSend(env, adminId, (note ? note + "\n\n" : "") +
-    "🧩 Card layout\nTick the fields to show side by side on each file card (as many as you like; they wrap onto more lines on a phone). Use ⬆️/⬇️ to order them.\n\n" +
-    "Preview: " + prev + "\nStyle: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle), { reply_markup: __sfKb(rows) });
-}
-
-async function __sfShowFilters(env, adminId, note) {
-  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    "🔎 فلاتر البحث\n\n" +
+    "ده شكل الفلاتر في التطبيق (" + cx.cols + " جنب بعض في كل سطر):\n\n" + __sfPreview(cx) + "\n" +
+    (cx.hidden.length ? "\n🙈 مخفي: " + cx.hidden.map(cx.label).join("، ") + "\n" : "") +
+    "\n⬆️ ⬇️ لتغيير الترتيب\n🙈 لإخفاء الفلتر  •  👁 لإظهاره\nاضغط على اسم الفلتر لتغيير اسمه أو كلمات البحث عنه.\n\n" +
+    "التغيير بيظهر في التطبيق خلال نص دقيقة تقريباً.";
   const rows = [];
-  cx.visible.forEach((k, i) => {
-    rows.push([
-      { text: (i + 1) + ". " + cx.label(k), callback_data: "A|SF_ONE|" + k },
-      { text: "⬆️", callback_data: "A|SF_FU|" + k },
-      { text: "⬇️", callback_data: "A|SF_FD|" + k },
-      { text: "🙈", callback_data: "A|SF_FT|" + k }
-    ]);
-  });
-  for (const k of cx.hidden) rows.push([{ text: "🙈 " + cx.label(k) + " (no filter)", callback_data: "A|SF_ONE|" + k }, { text: "👁 Show", callback_data: "A|SF_FT|" + k }]);
-  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
-  await tgSend(env, adminId, (note ? note + "\n\n" : "") +
-    "📋 Filters order\nThe filter drop-downs follow this order, and each one only lists values left by the ones above it. ⬆️/⬇️ moves a field, 🙈 removes its filter.", { reply_markup: __sfKb(rows) });
-}
-
-async function __sfShowFields(env, adminId, note) {
-  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
-  const rows = __sfPairs(cx.all.map((k) => ({ text: cx.label(k) + " (" + k + ")" + (isBuiltInField(k) ? "" : " ✦"), callback_data: "A|SF_ONE|" + k })));
-  rows.push([{ text: "➕ Add field", callback_data: "A|SF_ADD" }]);
-  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
-  await tgSend(env, adminId, (note ? note + "\n\n" : "") + "🏷 Fields\nTap a field to rename it or change the words that find it. ✦ = custom field (found in your files or added by you).", { reply_markup: __sfKb(rows) });
+  cx.visible.forEach((k, i) => rows.push([
+    { text: __sfN(i + 1) + " " + cx.label(k), callback_data: "A|SF_ONE|" + k },
+    { text: "⬆️", callback_data: "A|SF_U|" + k },
+    { text: "⬇️", callback_data: "A|SF_D|" + k },
+    { text: "🙈", callback_data: "A|SF_T|" + k }
+  ]));
+  for (const k of cx.hidden) rows.push([{ text: "🙈 " + cx.label(k), callback_data: "A|SF_ONE|" + k }, { text: "👁 إظهار", callback_data: "A|SF_T|" + k }]);
+  const colBtn = (n) => ({ text: (cx.cols === n ? "✅ " : "") + n, callback_data: "A|SF_C|" + n });
+  rows.push([{ text: "عدد الفلاتر في السطر:", callback_data: "A|NOP" }]);
+  rows.push([1, 2, 3, 4].map(colBtn));
+  rows.push([5, 6, 7, 8].map(colBtn));
+  rows.push([{ text: "➕ فلتر جديد", callback_data: "A|SF_ADD" }, { text: "🔄 الافتراضي", callback_data: "A|SF_RESET" }]);
+  rows.push([{ text: "⬅️ رجوع", callback_data: "A|HOME" }]);
+  await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
 async function __sfShowOne(env, adminId, key, note) {
   const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
-  if (!cx.all.includes(key)) { await __sfShowFields(env, adminId, "⚠️ Unknown field."); return; }
+  if (!cx.all.includes(key)) { await __sfShowMain(env, adminId, "⚠️ الفلتر ده مش موجود."); return; }
   const f = cx.cfg.fields[key] || {};
-  const card = (raw.card || []).indexOf(key);
-  const fpos = cx.visible.indexOf(key);
-  const lines = [
-    "🏷 " + cx.label(key) + "   (key: " + key + ")",
-    "Type: " + (isBuiltInField(key) ? "built-in " : "custom ") + fieldKind(key, cx.cfg),
-    "Search words: " + ((f.words || []).join(", ") || "— (use " + key + ":value)"),
-    "Filter: " + (fpos >= 0 ? "on, position " + (fpos + 1) : "off"),
-    "Card: " + (card >= 0 ? "position " + (card + 1) : "not on the card")
-  ];
+  const pos = cx.visible.indexOf(key);
+  const kind = { enum: "اختيار من قائمة", number: "رقم", text: "نص" }[fieldKind(key, cx.cfg)] || "نص";
+  const text = (note ? note + "\n\n" : "") +
+    "🏷 " + cx.label(key) + "\n\n" +
+    "الكود: " + key + (isBuiltInField(key) ? " (أساسي)" : " (إضافي)") + "\n" +
+    "النوع: " + kind + "\n" +
+    "الظهور: " + (pos >= 0 ? "ظاهر، رقم " + (pos + 1) : "مخفي") + "\n" +
+    "كلمات البحث: " + ((f.words || []).join("، ") || "لا يوجد") + "\n\n" +
+    "كلمات البحث هي اللي لو الطالب كتبها في خانة البحث تلاقي الفلتر ده. مثال: لو الكلمات «دكتور، dr» يبقى كتابة «dr ahmed» بتصفي على الحقل ده.\n" +
+    "في كل الأحوال بيشتغل كتابة  " + key + ":قيمة";
   const rows = [
-    [{ text: "✏️ Rename", callback_data: "A|SF_REN|" + key }, { text: "💬 Search words", callback_data: "A|SF_WRD|" + key }],
-    [{ text: card >= 0 ? "➖ Remove from card" : "➕ Put on card", callback_data: "A|SF_CT|" + key + "|o" }, { text: fpos >= 0 ? "🙈 Hide filter" : "👁 Show filter", callback_data: "A|SF_FT|" + key + "|o" }]
+    [{ text: "✏️ تغيير الاسم", callback_data: "A|SF_REN|" + key }, { text: "💬 كلمات البحث", callback_data: "A|SF_WRD|" + key }]
   ];
-  if (!isBuiltInField(key) && raw.fields[key]) rows.push([{ text: "🗑 Remove this field setting", callback_data: "A|SF_DEL|" + key }]);
-  rows.push([{ text: "⬅️ Back", callback_data: "A|SF_FLD" }]);
-  await tgSend(env, adminId, (note ? note + "\n\n" : "") + lines.join("\n"), { reply_markup: __sfKb(rows) });
+  if (!isBuiltInField(key) && raw.fields[key]) rows.push([{ text: "🗑 حذف الإعداد", callback_data: "A|SF_DEL|" + key }]);
+  rows.push([{ text: "⬅️ رجوع", callback_data: "A|SF" }]);
+  await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
 async function __sfAskText(env, adminId, mode, extra, prompt) {
@@ -7529,18 +7494,18 @@ async function __sfAskText(env, adminId, mode, extra, prompt) {
   await tgSend(env, adminId, prompt, { reply_markup: __pendingKb(false) });
 }
 
-// Reject a change that would introduce a NEW ambiguity (same word for two fields, or a filler word).
+// Reject a change that would introduce a NEW ambiguity (the same typed word for two fields, or a filler word).
 function __sfNewProblems(oldRaw, newRaw) {
   const probs = (raw) => {
     const out = new Set();
     try {
       const cfg = applyOverrides(defaultConfig(), raw);
       for (const p of validateConfig(cfg).problems) out.add(p);
-      const owner = new Map();                                  // a typed word may belong to ONE field only
+      const owner = new Map();
       for (const [k, f] of Object.entries(cfg.fields)) {
         for (const w of f.words || []) {
           const nw = String(w).toLowerCase();
-          if (owner.has(nw) && owner.get(nw) !== k) out.add("the word “" + nw + "” already finds the field “" + owner.get(nw) + "”");
+          if (owner.has(nw) && owner.get(nw) !== k) out.add("الكلمة «" + nw + "» بتدوّر بالفعل على الفلتر «" + owner.get(nw) + "»");
           else owner.set(nw, k);
         }
       }
@@ -7553,110 +7518,83 @@ function __sfNewProblems(oldRaw, newRaw) {
 
 async function __sfCallback(env, adminId, op, parts) {
   const key = String(parts[2] || "").toLowerCase();
-  const fromOne = parts[3] === "o";                       // pressed on the field page => go back there
   const raw = await __sfRaw(env);
-  const done = async (note) => {
-    if (fromOne) return __sfShowOne(env, adminId, key, note);
-    if (op.startsWith("SF_C") || op === "SF_ST") return __sfShowCard(env, adminId, note);
-    if (op.startsWith("SF_F")) return __sfShowFilters(env, adminId, note);
-    return __sfShowMain(env, adminId, note);
-  };
 
   if (op === "SF") { await __sfShowMain(env, adminId); return true; }
-  if (op === "SF_CARD") { await __sfShowCard(env, adminId); return true; }
-  if (op === "SF_FIL") { await __sfShowFilters(env, adminId); return true; }
-  if (op === "SF_FLD") { await __sfShowFields(env, adminId); return true; }
   if (op === "SF_ONE") { await __sfShowOne(env, adminId, key); return true; }
 
-  if (op === "SF_CT") {
-    raw.card = raw.card || [];
-    const i = raw.card.indexOf(key);
-    if (i >= 0) raw.card.splice(i, 1);
-    else {
-      if (raw.card.length >= MAX_CARD_FIELDS) { await done("⚠️ Too many fields on the card. Remove one first."); return true; }
-      raw.card.push(key);
-      const seen = await __sfSeen(env, adminId);
-      if (!knownFieldKeys(defaultConfig(), seen.keys).includes(key) && !raw.fields[key]) { await done("⚠️ Unknown field."); return true; }
-    }
-    await __sfSave(env, raw); await done("✅ Card updated."); return true;
-  }
-  if (op === "SF_CU" || op === "SF_CD") {
-    const i = (raw.card || []).indexOf(key);
-    const j = op === "SF_CU" ? i - 1 : i + 1;
-    if (i >= 0 && j >= 0 && j < raw.card.length) { [raw.card[i], raw.card[j]] = [raw.card[j], raw.card[i]]; await __sfSave(env, raw); }
-    await done(); return true;
-  }
-  if (op === "SF_ST") {
-    const i = CARD_STYLES.indexOf(raw.cardStyle || "full");
-    raw.cardStyle = CARD_STYLES[(i + 1) % CARD_STYLES.length];
-    await __sfSave(env, raw); await done("✅ Style: " + (__SF_STYLE_LABEL[raw.cardStyle])); return true;
-  }
-  if (op === "SF_FU" || op === "SF_FD") {
+  if (op === "SF_U" || op === "SF_D") {
     const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
     const order = cx.visible.slice();
-    const i = order.indexOf(key), j = op === "SF_FU" ? i - 1 : i + 1;
+    const i = order.indexOf(key), j = op === "SF_U" ? i - 1 : i + 1;
     if (i >= 0 && j >= 0 && j < order.length) {
       [order[i], order[j]] = [order[j], order[i]];
       order.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
       await __sfSave(env, raw);
     }
-    await done(); return true;
+    await __sfShowMain(env, adminId); return true;
   }
-  if (op === "SF_FT") {
-    const cur = raw.fields[key] || {};
-    if (cur.filter === false) delete cur.filter; else cur.filter = false;
+  if (op === "SF_T") {
+    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const cur = { ...(raw.fields[key] || {}) };
+    if (cx.hidden.includes(key)) {                           // show: put it last
+      delete cur.filter;
+      cur.filterOrder = (cx.visible.length ? cx.visible.length : 0) * 10;
+      cx.visible.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
+    } else cur.filter = false;
     raw.fields[key] = cur;
-    await __sfSave(env, raw); await done("✅ Filter " + (cur.filter === false ? "hidden" : "shown") + "."); return true;
+    await __sfSave(env, raw); await __sfShowMain(env, adminId); return true;
+  }
+  if (op === "SF_C") {
+    const n = Math.max(1, Math.min(MAX_FILTER_COLS, parseInt(parts[2] || "0", 10) || DEFAULT_FILTER_COLS));
+    raw.cols = n; await __sfSave(env, raw); await __sfShowMain(env, adminId); return true;
   }
   if (op === "SF_REN") {
-    await __sfAskText(env, adminId, "SF_REN", { key }, "✏️ Send the new label for “" + key + "” (up to 30 characters). Example: Doctor\nIt is only the displayed name; stored data does not change.");
+    await __sfAskText(env, adminId, "SF_REN", { key }, "✏️ ابعت الاسم الجديد للفلتر «" + key + "» (لحد 30 حرف). مثال: الدكتور\nده الاسم اللي بيظهر بس، والبيانات المخزّنة مبتتغيّرش.");
     return true;
   }
   if (op === "SF_WRD") {
-    await __sfAskText(env, adminId, "SF_WRD", { key }, "💬 Send the words that should find “" + key + "” in the search box, separated by commas. Example: doctor, dr\n(So typing “dr ahmed” filters this field.)\nSend - to clear them (the key:value form still works).");
+    await __sfAskText(env, adminId, "SF_WRD", { key }, "💬 ابعت الكلمات اللي تلاقي الفلتر «" + key + "» في خانة البحث، بينها فاصلة. مثال: دكتور, dr\nابعت - لمسحها.");
     return true;
   }
   if (op === "SF_ADD") {
-    await __sfAskText(env, adminId, "SF_ADD", {}, "➕ New field. Send:  key  label  [text|number]\nExamples:\n• doctor Doctor\n• year Year number\nKey = letters/digits/_ (max 24). Admins then tag files with [Dr Ahmed].doctor. Files keep working without it.");
+    await __sfAskText(env, adminId, "SF_ADD", {}, "➕ فلتر جديد. ابعت:  الكود  الاسم  [text|number]\n\nأمثلة:\n• doctor الدكتور\n• year السنة number\n\nالكود حروف إنجليزي/أرقام/_ وبعدها بتوسم الملفات بـ  [قيمة].الكود");
     return true;
   }
   if (op === "SF_DEL") {
     delete raw.fields[key];
-    raw.card = (raw.card || []).filter((k) => k !== key);
-    await __sfSave(env, raw); await __sfShowFields(env, adminId, "✅ Setting removed. Values already stored in files are kept."); return true;
+    await __sfSave(env, raw); await __sfShowMain(env, adminId, "✅ اتحذف الإعداد. القيم المخزّنة في الملفات زي ما هي."); return true;
   }
   if (op === "SF_RESET") {
-    await tgSend(env, adminId, "🔄 Reset every field label, order, card layout and custom field to the defaults?\nFile metadata is not touched.", { reply_markup: __sfKb([
-      [{ text: "✅ Yes, reset", callback_data: "A|SF_RESET2" }, { text: "✖️ No", callback_data: "A|SF" }]
+    await tgSend(env, adminId, "🔄 ترجّع الترتيب والأسماء والفلاتر الإضافية وعدد الأعمدة للوضع الافتراضي؟\nبيانات الملفات مبتتغيّرش.", { reply_markup: __sfKb([
+      [{ text: "✅ أيوه، رجّعها", callback_data: "A|SF_RESET2" }, { text: "✖️ لأ", callback_data: "A|SF" }]
     ]) });
     return true;
   }
   if (op === "SF_RESET2") {
-    await __sfSave(env, { v: 1, fields: {}, card: [], cardStyle: "full" });
-    await __sfShowMain(env, adminId, "✅ Reset to defaults."); return true;
+    await __sfSave(env, { v: 1, cols: DEFAULT_FILTER_COLS, fields: {} });
+    await __sfShowMain(env, adminId, "✅ رجعت للافتراضي."); return true;
   }
   return false;
 }
 
-// Text answers for the three prompts above. Returns true when handled.
+// Text answers for the three prompts above. Returns "retry" when the answer was rejected (keep waiting), true when finished.
 async function __sfHandleText(env, chat_id, pend, text) {
   const t = String(text || "").trim();
   const low = t.toLowerCase();
-  const back = async (note) => {
-    if (pend.mode === "SF_ADD") return __sfShowMain(env, chat_id, note);
-    return __sfShowOne(env, chat_id, String(pend.key || ""), note);
-  };
-  if (!t || low === "/cancel" || low === "/done") { await back("Cancelled."); return true; }
+  const retry = async (msg) => { await tgSend(env, chat_id, msg, { reply_markup: __pendingKb(false), noScope: true }); return "retry"; };
+  const back = async (note) => (pend.mode === "SF_ADD" ? __sfShowMain(env, chat_id, note) : __sfShowOne(env, chat_id, String(pend.key || ""), note));
+  if (!t || low === "/cancel" || low === "/done") { await back("تم الإلغاء."); return true; }
   const raw = await __sfRaw(env);
   const seen = await __sfSeen(env, chat_id);
 
   if (pend.mode === "SF_REN") {
     const key = String(pend.key || "");
     const label = t.replace(/[\u0000-\u001f<>]/g, "").slice(0, 30).trim();
-    if (!label) { await tgSend(env, chat_id, "⚠️ Empty label. Send a label or Cancel.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (!label) return retry("⚠️ الاسم فاضي. ابعت اسم أو اضغط إلغاء.");
     raw.fields[key] = { ...(raw.fields[key] || {}), label };
     await __sfSave(env, raw);
-    await back("✅ Renamed to “" + label + "”.");
+    await back("✅ الاسم بقى «" + label + "».");
     return true;
   }
   if (pend.mode === "SF_WRD") {
@@ -7665,29 +7603,29 @@ async function __sfHandleText(env, chat_id, pend, text) {
     const next = JSON.parse(JSON.stringify(raw));
     next.fields[key] = { ...(next.fields[key] || {}), words };
     const probs = __sfNewProblems(raw, next);
-    if (probs.length) { await tgSend(env, chat_id, "⚠️ Not saved:\n• " + probs.join("\n• ") + "\n\nSend other words, or Cancel.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (probs.length) return retry("⚠️ مش اتحفظ:\n• " + probs.join("\n• ") + "\n\nابعت كلمات تانية أو اضغط إلغاء.");
     await __sfSave(env, next);
-    await back(words.length ? "✅ Search words: " + words.join(", ") : "✅ Search words cleared.");
+    await back(words.length ? "✅ كلمات البحث: " + words.join("، ") : "✅ اتمسحت كلمات البحث.");
     return true;
   }
   if (pend.mode === "SF_ADD") {
     const m = /^([A-Za-z][A-Za-z0-9_]{0,23})\s+(.+)$/.exec(t.replace(/\s+/g, " "));
-    if (!m) { await tgSend(env, chat_id, "⚠️ Format:  key  label  [text|number]\nExample: year Year number", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (!m) return retry("⚠️ الشكل:  الكود  الاسم  [text|number]\nمثال: year السنة number");
     const key = m[1].toLowerCase();
     let rest = m[2].trim(), kind = "text";
     const km = /\s(text|number)$/i.exec(" " + rest);
     if (km) { kind = km[1].toLowerCase(); rest = rest.slice(0, rest.length - km[1].length).trim(); }
     const label = rest.replace(/[\u0000-\u001f<>]/g, "").slice(0, 30).trim();
     const known = knownFieldKeys(applyOverrides(defaultConfig(), raw), seen.keys);
-    if (!label) { await tgSend(env, chat_id, "⚠️ The label is empty.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
-    if (known.includes(key) && (isBuiltInField(key) || raw.fields[key])) { await tgSend(env, chat_id, "⚠️ “" + key + "” already exists. Pick another key (or rename the existing field).", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
-    if (Object.keys(raw.fields).filter((k) => !isBuiltInField(k)).length >= 20) { await tgSend(env, chat_id, "⚠️ Too many custom fields (max 20).", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (!label) return retry("⚠️ الاسم فاضي.");
+    if (known.includes(key) && (isBuiltInField(key) || raw.fields[key])) return retry("⚠️ الكود «" + key + "» موجود بالفعل. اختار كود تاني.");
+    if (Object.keys(raw.fields).filter((k) => !isBuiltInField(k)).length >= 20) return retry("⚠️ وصلت للحد الأقصى من الفلاتر الإضافية (20).");
     const next = JSON.parse(JSON.stringify(raw));
     next.fields[key] = { label, kind, words: key.length >= 3 ? [key] : [], ...(kind === "number" && /year/.test(key) ? { max: 2200 } : {}) };
     let note = "";
-    if (__sfNewProblems(raw, next).length) { next.fields[key].words = []; note = "\n(No natural-language word: it clashes with another field. Use " + key + ":value.)"; }
+    if (__sfNewProblems(raw, next).length) { next.fields[key].words = []; note = "\n(مفيش كلمة بحث له لأنها بتتعارض مع فلتر تاني. استخدم " + key + ":قيمة)"; }
     await __sfSave(env, next);
-    await __sfShowOne(env, chat_id, key, "✅ Field added: " + label + " (" + kind + ")." + note + "\nTag files with  [value]." + key);
+    await __sfShowOne(env, chat_id, key, "✅ اتضاف الفلتر «" + label + "»." + note + "\nوسم الملفات بـ  [قيمة]." + key);
     return true;
   }
   return false;
