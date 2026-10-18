@@ -771,8 +771,10 @@ export function buildFilterModel(entries, state = {}, cfgIn) {
     for (const k of order.slice(0, idx)) if (filters[k] != null) cons[k] = expectedFor(k, filters[k], c.cfg);     // a chosen filter overrides what the query said about that field
     const pool = entries.filter((e) => matchFields(e, cons, c.cfg));
     const options = optionsFor(pool, key, c);
-    if (!options.length) return;
-    model.push({ key, label: labelOfField(c, key), kind: kindOf(c, key), options, selected: filters[key] != null ? filters[key] : null });
+    // A field that exists anywhere in the data keeps its place in the panel even when the current query leaves it
+    // no values (it is shown disabled): the panel never grows/shrinks while the user types.
+    if (!options.length && !entries.some((e) => e.meta && e.meta[key] != null)) return;
+    model.push({ key, label: labelOfField(c, key), kind: kindOf(c, key), options, disabled: !options.length, selected: filters[key] != null ? filters[key] : null });
   });
   return model;
 }
@@ -954,29 +956,29 @@ export function groupResults(matches, q, ctx, cfgIn) {
 }
 
 // ============================================================================
-// 12. Admin-managed overrides — field labels, filter order, card layout, custom fields.
-//     Stored by the bot as one small JSON document and shipped to the Mini App with the content.
-//     The built-in registry above is the DEFAULT; overrides only ever sit on top of it:
-//       { v:1, rev, fields:{ key:{label?,chip?,filter?,filterOrder?,words?,kind?,max?} },
-//         card:[keys, any number], cardStyle:"full"|"short"|"labeled" }
-//     Rules: a built-in field may be relabelled / reordered / hidden from filters, but its kind and
+// 12. Admin-managed overrides — what the filter panel looks like (labels, order, which filters, columns)
+//     plus custom fields. Stored by the bot as one small JSON document and shipped with the content.
+//       { v:1, rev, cols, fields:{ key:{label?,filter?,filterOrder?,words?,kind?,max?} } }
+//     Rules: a built-in field may be relabelled / reordered / hidden from the panel, but its kind and
 //     dictionary never change; a NEW field is text or number only; keys follow the registry-key rule.
 //     Stored values never depend on any of this (metadata keeps its own canonical order).
 // ============================================================================
-export const MAX_CARD_FIELDS = 40;          // technical sanity bound only (a file holds at most 16 fields); not a design limit
-export const CARD_STYLES = ["full", "short", "labeled"];
+export const DEFAULT_FILTER_COLS = 2;
+export const MAX_FILTER_COLS = 8;
 const OV_KEY = /^[a-z][a-z0-9_]{0,23}$/;
 const OV_MAX_FIELDS = 24;
 
-const cleanLabel = (x) => String(x == null ? "" : x).replace(/[\u0000-\u001f​-‏⁠-⁤﻿<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 30);
+const cleanLabel = (x) => String(x == null ? "" : x).replace(/[\u0000-\u001f\u200b-\u200f\u2060-\u2064\ufeff<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 30);
 
 // Returns { ov, warnings } — never throws; anything invalid is dropped and reported.
 export function sanitizeOverrides(raw, baseCfg) {
   const base = (baseCfg && baseCfg.fields) ? baseCfg : DEFAULT_CFG;
   const warnings = [];
-  const ov = { v: 1, rev: 0, fields: {}, card: [], cardStyle: "full" };
+  const ov = { v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, fields: {} };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ov, warnings };
   ov.rev = Number.isFinite(Number(raw.rev)) ? Math.max(0, Math.floor(Number(raw.rev))) : 0;
+  const cols = Math.round(Number(raw.cols));
+  if (Number.isFinite(cols) && cols >= 1) ov.cols = Math.min(MAX_FILTER_COLS, cols);
   const fields = raw.fields && typeof raw.fields === "object" && !Array.isArray(raw.fields) ? raw.fields : {};
   let count = 0;
   for (const [rawKey, f] of Object.entries(fields)) {
@@ -987,7 +989,6 @@ export function sanitizeOverrides(raw, baseCfg) {
     const o = {};
     const label = cleanLabel(f.label);
     if (label) o.label = label;
-    if (typeof f.chip === "string") { const ch = cleanLabel(f.chip); if (ch && ch.includes("{{v}}")) o.chip = ch; }
     if (f.filter === false) o.filter = false;
     if (Number.isFinite(Number(f.filterOrder)) && f.filterOrder !== null && f.filterOrder !== "") o.filterOrder = Math.max(0, Math.min(1000, Math.round(Number(f.filterOrder))));
     if (Array.isArray(f.words)) {
@@ -1001,17 +1002,10 @@ export function sanitizeOverrides(raw, baseCfg) {
     }
     ov.fields[key] = o;
   }
-  const card = Array.isArray(raw.card) ? raw.card : [];
-  const seen = new Set();
-  for (const k of card) {
-    const key = String(k).toLowerCase();
-    if (!OV_KEY.test(key) || seen.has(key)) continue;
-    if (ov.card.length >= MAX_CARD_FIELDS) { warnings.push(`too many card fields; "${key}" was dropped`); break; }
-    seen.add(key); ov.card.push(key);
-  }
-  ov.cardStyle = CARD_STYLES.includes(raw.cardStyle) ? raw.cardStyle : "full";
   return { ov, warnings };
 }
+
+const isDefaultOv = (ov) => !Object.keys(ov.fields).length && ov.cols === DEFAULT_FILTER_COLS;
 
 let OV_CACHE = new Map();
 // base cfg + overrides => the effective cfg (identity-stable per overrides content, so the compile cache holds).
@@ -1019,7 +1013,7 @@ export function applyOverrides(baseCfg, ovIn) {
   const base = (baseCfg && baseCfg.fields) ? baseCfg : DEFAULT_CFG;
   if (!ovIn || typeof ovIn !== "object") return base;
   const { ov } = sanitizeOverrides(ovIn, base);
-  if (!Object.keys(ov.fields).length && !ov.card.length && ov.cardStyle === "full") return base;
+  if (isDefaultOv(ov)) return base;
   const ckey = JSON.stringify(ov);
   let perBase = OV_CACHE.get(base);
   if (!perBase) { perBase = new Map(); OV_CACHE.set(base, perBase); }
@@ -1031,53 +1025,32 @@ export function applyOverrides(baseCfg, ovIn) {
     if (fields[k]) {
       const f = fields[k];
       if (o.label) f.label = o.label;
-      if (o.chip) f.chip = o.chip;
       if (o.filter === false) f.filter = false;
       if (o.filterOrder != null) f.filterOrder = o.filterOrder;
       if (o.words) f.words = o.words;
     } else {
       fields[k] = { label: o.label || k, kind: o.kind || "text", words: o.words || [], custom: true };
-      if (o.chip) fields[k].chip = o.chip;
       if (o.filter === false) fields[k].filter = false;
       if (o.filterOrder != null) fields[k].filterOrder = o.filterOrder;
       if (o.max != null) fields[k].max = o.max;
     }
   }
-  const cfg = { ...base, fields, display: { card: ov.card, cardStyle: ov.cardStyle } };
+  const cfg = { ...base, fields, display: { cols: ov.cols } };
   if (perBase.size >= 6) perBase.clear();
   perBase.set(ckey, cfg);
   return cfg;
 }
 
 export const defaultConfig = () => DEFAULT_CFG;
-
-// The chips shown side by side on a result card, in the admin's order (any number). Only fields the file has.
-export function cardChips(meta, cfgIn) {
+export const isDefaultOverrides = (ovIn, baseCfg) => !ovIn || isDefaultOv(sanitizeOverrides(ovIn, baseCfg).ov);
+// How many filters sit side by side in the panel (admin setting).
+export function filterColumns(cfgIn) {
   const c = compile(cfgIn);
-  const d = c.cfg.display || {};
-  const keys = (d.card || []).slice(0, MAX_CARD_FIELDS);
-  const style = CARD_STYLES.includes(d.cardStyle) ? d.cardStyle : "full";
-  const out = [];
-  if (!meta || typeof meta !== "object") return out;
-  for (const key of keys) {
-    const v = meta[key];
-    if (v == null) continue;
-    const vals = asArray(v);
-    if (!vals.length) continue;
-    let text;
-    if (style === "short") {
-      text = kindOf(c, key) === "number" ? formatNumbers(vals.map(Number).sort((a, b) => a - b)) : vals.join("/");
-    } else {
-      text = formatValues(c, key, vals, style === "labeled" ? "value" : "chip");
-    }
-    if (!text) continue;
-    const label = labelOfField(c, key);
-    out.push({ key, label, text: style === "labeled" ? `${label}: ${text}` : text });
-  }
-  return out;
+  const n = c.cfg.display && Number(c.cfg.display.cols);
+  return Number.isFinite(n) && n >= 1 ? Math.min(MAX_FILTER_COLS, Math.round(n)) : DEFAULT_FILTER_COLS;
 }
 
-// Every field the admin can place on a card / in the filters: registry + custom + keys seen in data.
+// Every field the admin can place in the panel: registry + custom + keys seen in data.
 export function knownFieldKeys(cfgIn, seenKeys = []) {
   const c = compile(cfgIn);
   const extra = [...new Set(seenKeys.map((k) => String(k).toLowerCase()).filter((k) => OV_KEY.test(k) && !c.cfg.fields[k]))].sort();
