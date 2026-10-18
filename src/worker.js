@@ -39,8 +39,8 @@
 
 import { handleMiniApi } from "./miniapp-api.js";
 import {
-  SEARCH_DICTIONARY, parseAdminSearchInput, normalizeSearchMeta, describeMeta, codesHelpText,
-  serializeSearchMeta, parseSearchMeta, shortMeta, completeMetaFromPath
+  parseAdminSearchInput, normalizeSearchMeta, serializeSearchMeta, describeMeta, shortMeta, codesHelpText,
+  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, cardChips, MAX_CARD_FIELDS, CARD_STYLES
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -50,6 +50,7 @@ function miniDeps() {
   if (__MINI_DEPS) return __MINI_DEPS;
   __MINI_DEPS = {
     loadContent: (env, ctx) => loadUserContentCacheOnly(env, ctx, makeCounters()),
+    searchConfig: (env) => __searchConfigForApi(env),
     integrity: (db) => contentCacheIntegrityCached(db),
     getBlockedMode: (env, uid, ctx) => getBlockedModeUserFast(env, uid, ctx),
     isAdmin: (env, uid) => parseAdmins(env).includes(Number(uid)),
@@ -62,7 +63,7 @@ function miniDeps() {
   return __MINI_DEPS;
 }
 
-export default {
+const __handler = {
   async fetch(request, rawEnv, ctx) {
     // Per-request view of env that also carries ctx, so low-level helpers (monitor, refresh-ahead)
     // can defer work with ctx.waitUntil without changing hundreds of call signatures.
@@ -103,6 +104,7 @@ export default {
           tg_edit: 0,
           action: "unknown"
         };
+        try { const st = env[REQ_STATS]; if (st) st.perf = perf; } catch (_) {}
         const ok = (tag, webhookMethod) => {
           const tot = performance.now() - perf.t0;
           const serverTiming = `tot;dur=${tot.toFixed(1)}, tg;dur=${perf.tg_edit.toFixed(1)}, q;dur=${perf.q_wait.toFixed(1)}, blk;dur=${perf.blk.toFixed(1)}, db;dur=${perf.db.toFixed(1)}, path;dur=${perf.path.toFixed(1)}`;
@@ -462,6 +464,7 @@ export default {
             ? String((update.callback_query && update.callback_query.data) || "")
             : String(text || "");
           perf.action = isCq ? rawUserData : (rawUserData ? rawUserData.slice(0, 20) : (msg ? "message" : "other"));
+          try { const st = env[REQ_STATS]; if (st) { st.label = rawUserData.slice(0, 80); st.chat = Number(chat_id); } } catch (_) {}
           thisUpdateId = getNextUpdateId(update);
           registerUserClick(chat_id, thisUpdateId);
           if (isCq) {
@@ -780,6 +783,7 @@ export default {
           if (text === "/backup") {
             try {
               const snap = await __contentLoadSnapshotFromD1(env);
+              try { const sc = await __searchCfgLoad(env, true); if (sc.ov) snap.search_cfg = sc.ov; } catch (_) {}     // field display settings travel with the backup
               const stamp = new Date().toISOString().replace(/[:.]/g, "-");
               const ok = await tgSendDocumentBuffer(env, chat_id, `backup_${stamp}.json`, JSON.stringify(snap, null, 2), "📦 Official content database backup (D1 Snapshot). Keep it safe.");
               if (!ok) await tgSend(env, chat_id, "⚠️ Failed to send backup. Please try again.");
@@ -828,10 +832,14 @@ export default {
               const backupJson = JSON.parse(backupText);
               const restResult = await contentRestoreFromBackup(env, chat_id, backupJson);
               if (restResult.ok) {
+                let cfgNote = "";
+                try {
+                  if (backupJson && backupJson.search_cfg && typeof backupJson.search_cfg === "object") { await __searchCfgSave(env, backupJson.search_cfg); cfgNote = "\n🔎 Search field settings restored."; }
+                } catch (_) {}
                 const cacheNote = restResult.cacheSynchronized
                   ? "D1 updated and KV cache synchronized."
                   : "D1 restored successfully. KV/Edge cache refresh will self-heal automatically.";
-                await tgSend(env, chat_id, `✅ Content restored successfully!\nNew Version: ${restResult.version}\n${cacheNote}`);
+                await tgSend(env, chat_id, `✅ Content restored successfully!\nNew Version: ${restResult.version}\n${cacheNote}${cfgNote}`);
                 await showAdminNode(env, chat_id, restResult.snapshot || null);
               } else {
                 await tgSend(env, chat_id, "⚠️ Restore failed: " + restResult.error);
@@ -873,9 +881,14 @@ export default {
             return json({ ok: true });
           }
 
+          if (lower === "/perf") {
+            await tgSend(env, chat_id, await slowPressReport(env));
+            return json({ ok: true });
+          }
+
           if (lower === "/monitor" || lower === "/monitor_status") {
             const mId = getMonitorAdminId(env);
-            await tgSend(env, chat_id, `📊 Monitoring Status: ${isMonitorEnabled(env) ? "Enabled ✅" : "Disabled ❌"}\nRecipient ID: ${mId > 0 ? mId : "Not set"}`);
+            await tgSend(env, chat_id, `📊 Monitoring Status: ${isMonitorEnabled(env) ? "Enabled ✅" : "Disabled ❌"}\nRecipient ID: ${mId > 0 ? mId : "Not set"}\nMini App open notices: ${isMonitorEnabled(env) ? "ON" : "OFF"}\nChat forwarding (user messages / bot replies): ${MONITOR_CHAT_ACTIVITY ? "ON" : "OFF"}\nBuild: ${BUILD_ID}`);
             return json({ ok: true });
           }
 
@@ -1383,13 +1396,141 @@ export default {
 
 };
 
+export default {
+  fetch: (request, env, ctx) => timedFetch(request, env, ctx),
+  scheduled: (event, env, ctx) => __handler.scheduled(event, env, ctx)
+};
+
 /* ============================================================================
    TELEGRAM COMMUNICATION & MEDIA HELPERS
    ============================================================================ */
 const TG = (env) => "https://api.telegram.org/bot" + env.BOT_TOKEN;
 const CTH = { "content-type": "application/json" };
 
+// ---------------------------------------------------------------------------
+// Slow-press diagnostics.
+// Every Bot API call is timed. A webhook that takes >= SLOW_PRESS_MS is written to a small D1 table
+// (perf_slow) AFTER the reply, through ctx.waitUntil, so /perf can show slow presses from ALL Worker
+// instances (Cloudflare runs several, and starts new ones often). Writes are throttled and the table is
+// trimmed, so this stays far below the free-plan limits. Nothing here ever runs on the reply path.
+// ---------------------------------------------------------------------------
+const SLOW_PRESS_MS = 300;
+const REQ_STATS = Symbol.for("bot.requestStats");
+const TG_CALL_LOG = [];            // {t0,t1,method,chat}
+let ISOLATE_STARTED = 0;           // set on the first request (Date.now() is not reliable while the module loads)
+let ISOLATE_REQUESTS = 0;
+let PERF_TABLE_READY = false;
+let PERF_LAST_WRITE = 0;
+let PERF_WRITES = 0;
+const PERF_MIN_GAP_MS = 1000;      // at most one diagnostic row per second per instance
+const PERF_MAX_WRITES = 300;       // and at most 300 per instance lifetime
+const PERF_KEEP_ROWS = 300;
+
+function tgLogCall(url, options, t0) {
+  try {
+    const t1 = performance.now();
+    let chat = null;
+    const body = options && typeof options.body === "string" ? options.body : "";
+    const m = body.match(/"chat_id":\s*"?(-?\d+)/);
+    if (m) chat = Number(m[1]);
+    TG_CALL_LOG.push({ t0, t1, method: String(url).split("/").pop().split("?")[0], chat });
+    if (TG_CALL_LOG.length > 300) TG_CALL_LOG.splice(0, TG_CALL_LOG.length - 200);
+  } catch (_) {}
+}
+
+async function perfEnsureTable(env) {
+  if (PERF_TABLE_READY) return true;
+  try {
+    await env.SQL.prepare(
+      "CREATE TABLE IF NOT EXISTS perf_slow (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, label TEXT, total INTEGER, cold INTEGER, tg_calls INTEGER, tg_sum INTEGER, slowest TEXT, ban INTEGER, content INTEGER, inst_age INTEGER, inst_reqs INTEGER)"
+    ).run();
+    PERF_TABLE_READY = true;
+  } catch (_) {}
+  return PERF_TABLE_READY;
+}
+
+async function perfPersist(env, rec) {
+  try {
+    if (!env || !env.SQL) return;
+    if (!(await perfEnsureTable(env))) return;
+    await env.SQL.prepare(
+      "INSERT INTO perf_slow (at,label,total,cold,tg_calls,tg_sum,slowest,ban,content,inst_age,inst_reqs) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    ).bind(rec.at, rec.label, rec.total, rec.cold ? 1 : 0, rec.tgCalls, rec.tgSum, rec.slowest, rec.ban, rec.content, rec.instAge, rec.instReqs).run();
+    if (PERF_WRITES % 25 === 0) {
+      await env.SQL.prepare("DELETE FROM perf_slow WHERE id <= (SELECT COALESCE(MAX(id),0) FROM perf_slow) - ?1").bind(PERF_KEEP_ROWS).run();
+    }
+  } catch (_) {}
+}
+
+async function timedFetch(request, rawEnv, ctx) {
+  let url = null;
+  try { url = new URL(request.url); } catch (_) {}
+  if (!(url && request.method === "POST" && url.pathname === "/webhook")) {
+    return __handler.fetch(request, rawEnv, ctx);
+  }
+  if (!ISOLATE_STARTED) ISOLATE_STARTED = Date.now();
+  const stats = { label: "", chat: null, perf: null };
+  let env = withRequestCtx(rawEnv, ctx);
+  try { if (env !== rawEnv) Object.defineProperty(env, REQ_STATS, { value: stats, enumerable: false }); } catch (_) {}
+  const t0 = performance.now();
+  const wasCold = ISOLATE_REQUESTS === 0;
+  ISOLATE_REQUESTS++;
+  const res = await __handler.fetch(request, env, ctx);
+  try {
+    const dur = performance.now() - t0;
+    const nowMs = Date.now();
+    if (dur >= SLOW_PRESS_MS && PERF_WRITES < PERF_MAX_WRITES && (nowMs - PERF_LAST_WRITE) >= PERF_MIN_GAP_MS) {
+      PERF_LAST_WRITE = nowMs;
+      PERF_WRITES++;
+      const calls = TG_CALL_LOG.filter(c => c.t0 >= t0 && c.t0 <= t0 + dur && (stats.chat == null || c.chat === stats.chat));
+      let slowest = null, sum = 0;
+      for (const c of calls) { const d = c.t1 - c.t0; sum += d; if (!slowest || d > slowest.d) slowest = { d, method: c.method }; }
+      const pf = stats.perf || {};
+      const rec = {
+        at: nowMs,
+        label: String(stats.label || "").replace(/[\u200b-\u200f\u2060-\u2064\ufe00-\ufe0f\u{e0000}-\u{e007f}]/gu, "").slice(0, 28) || "-",
+        total: Math.round(dur), cold: wasCold, tgCalls: calls.length, tgSum: Math.round(sum),
+        slowest: slowest ? slowest.method + " " + Math.round(slowest.d) + "ms" : "-",
+        ban: Math.round(Number(pf.blk) || 0), content: Math.round(Number(pf.db) || 0),
+        instAge: Math.round((nowMs - ISOLATE_STARTED) / 1000), instReqs: ISOLATE_REQUESTS
+      };
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(perfPersist(env, rec));
+    }
+  } catch (_) {}
+  return res;
+}
+
+// Text for the admin command /perf. Reads the last rows from D1 (all instances), only when asked.
+async function slowPressReport(env) {
+  const instAge = ISOLATE_STARTED ? Math.round((Date.now() - ISOLATE_STARTED) / 1000) : 0;
+  let head = "🐢 الضغطات البطيئة (أكتر من " + SLOW_PRESS_MS + "ms)\n" +
+    "النسخة اللي ردّت عليك دلوقتي: عمرها " + instAge + " ثانية، وخدمت " + ISOLATE_REQUESTS + " طلب" +
+    (ISOLATE_REQUESTS <= 1 ? " (يعني اتشغّلت من لحظات)" : "") + "\n";
+  let rows = [], c24 = null;
+  try {
+    if (env && env.SQL && await perfEnsureTable(env)) {
+      const r = await env.SQL.prepare("SELECT at,label,total,cold,tg_calls,tg_sum,slowest,ban,content FROM perf_slow ORDER BY id DESC LIMIT 10").all();
+      rows = (r && r.results) || [];
+      const since = Date.now() - 24 * 3600 * 1000;
+      c24 = await env.SQL.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(cold),0) AS cold FROM perf_slow WHERE at >= ?1").bind(since).first();
+    }
+  } catch (_) {}
+  if (!rows.length) return head + "\nمفيش ضغطات بطيئة متسجلة لسه. اضغط الزرار البطيء وبعدها ابعت /perf تاني.";
+  const fmt = (r) => {
+    const t = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(Number(r.at)));
+    return `${t} · "${r.label}" · ${r.total}ms${Number(r.cold) ? " · ❄️ أول طلب بعد تشغيل جديد" : ""}\n   تليجرام: ${r.tg_calls} طلب = ${r.tg_sum}ms (أبطأ طلب: ${r.slowest}) · الحظر ${r.ban}ms · المحتوى ${r.content}ms`;
+  };
+  const sum = c24 ? `آخر 24 ساعة: ${c24.n} ضغطة بطيئة، منها ${c24.cold} بعد تشغيل جديد (cold start)\n` : "";
+  return head + sum + "\n" + rows.map(fmt).join("\n");
+}
+
 async function tgFetchWithTimeout(url, options, timeoutMs) {
+  const __t0 = performance.now();
+  try { return await tgFetchWithTimeoutInner(url, options, timeoutMs); }
+  finally { tgLogCall(url, options, __t0); }
+}
+
+async function tgFetchWithTimeoutInner(url, options, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => { try { ctrl.abort(); } catch (_) {} }, timeoutMs || 8000);
   let onExternalAbort = null;
@@ -3727,19 +3868,59 @@ async function __ensureSearchColumns(env) {
 }
 
 // Canonical JSON text for a meta object (stable key order => no phantom diffs).
-// Field-agnostic: ANY field survives (the shared core decides the order and the normalization).
+// Field-agnostic: every field survives; the registry only decides the ORDER and how values normalize.
 function __searchMetaJson(meta) {
-  return serializeSearchMeta(meta);
+  return serializeSearchMeta(meta, SEARCH_CFG_STATE.cfg);
 }
 function __searchMetaParse(text) {
-  return parseSearchMeta(text);
+  if (text == null || text === "") return null;
+  try { return normalizeSearchMeta(typeof text === "string" ? JSON.parse(text) : text, SEARCH_CFG_STATE.cfg); } catch (_) { return null; }
 }
+// ---------------------------------------------------------------------------
+// Admin-managed search display config (field labels, filter order, card layout, custom fields).
+// One small JSON document in D1 (table search_config, created on first save; absence = built-in defaults).
+// Read at most every SEARCH_CFG_TTL_MS per isolate; saving it refreshes this isolate at once and the
+// Mini App picks it up through the content version (".c<rev>").  Never part of the content draft.
+// ---------------------------------------------------------------------------
+const SEARCH_CFG_TTL_MS = 30000;
+let SEARCH_CFG_STATE = { ov: null, rev: 0, cfg: defaultConfig(), at: 0, empty: true };
+function __searchCfgIsEmpty(ov) { return !ov || (!Object.keys(ov.fields || {}).length && !(ov.card || []).length && (ov.cardStyle || "full") === "full"); }
+function __searchCfgBuild(raw, rev) {
+  const { ov, warnings } = sanitizeOverrides(raw, defaultConfig());
+  ov.rev = Number(rev) || 0;
+  const empty = __searchCfgIsEmpty(ov);
+  return { ov: empty ? null : ov, rev: ov.rev, cfg: empty ? defaultConfig() : applyOverrides(defaultConfig(), ov), at: Date.now(), empty, warnings };
+}
+async function __searchCfgLoad(env, force = false) {
+  if (!force && SEARCH_CFG_STATE.at && Date.now() - SEARCH_CFG_STATE.at < SEARCH_CFG_TTL_MS) return SEARCH_CFG_STATE;
+  let row = null;
+  try { row = await env.SQL.prepare("SELECT json, rev FROM search_config WHERE id=1").first(); }
+  catch (_) { row = null; }                                    // table not created yet = defaults
+  let raw = null;
+  if (row && row.json) { try { raw = JSON.parse(row.json); } catch (_) { raw = null; } }
+  SEARCH_CFG_STATE = __searchCfgBuild(raw, row ? row.rev : 0);
+  return SEARCH_CFG_STATE;
+}
+async function __searchCfgSave(env, raw) {
+  await env.SQL.prepare("CREATE TABLE IF NOT EXISTS search_config (id INTEGER PRIMARY KEY CHECK (id=1), json TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)").run();
+  const cur = await __searchCfgLoad(env, true);
+  const next = __searchCfgBuild(raw, (cur.rev || 0) + 1);
+  const toStore = sanitizeOverrides(raw, defaultConfig()).ov;
+  toStore.rev = next.rev;
+  await env.SQL.prepare("INSERT INTO search_config(id,json,rev,updated_at) VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET json=excluded.json, rev=excluded.rev, updated_at=excluded.updated_at")
+    .bind(JSON.stringify(toStore), next.rev, Math.floor(Date.now() / 1000)).run();
+  SEARCH_CFG_STATE = next;
+  return next;
+}
+// What the Mini App API needs: { ov, rev, cfg }.
+async function __searchConfigForApi(env) { return __searchCfgLoad(env); }
+
 // Only present when set => legacy files stay byte-identical (no spurious "changed" signatures/hashes).
 function __searchFieldsOf(f) {
   const out = {};
   if (!f) return out;
   const name = f.search_name != null && String(f.search_name).trim() ? String(f.search_name).trim().slice(0, 200) : null;
-  const meta = normalizeSearchMeta(f.search_meta);
+  const meta = normalizeSearchMeta(f.search_meta, SEARCH_CFG_STATE.cfg);
   if (name) out.search_name = name;
   if (meta) out.search_meta = meta;
   return out;
@@ -3748,6 +3929,7 @@ function __searchFieldsOf(f) {
 async function __contentLoadSnapshotFromD1(env) {
   const dbBinding = env.SQL;
   if (!dbBinding) throw new Error("D1 Database binding missing");
+  try { await __searchCfgLoad(env); } catch (_) {}      // kinds/labels of admin-defined fields must be known while normalizing
 
   // IMPORTANT: Build the entire content snapshot inside ONE D1 batch.
   // D1 batch() executes the statements as a single SQL transaction, so all
@@ -5668,7 +5850,7 @@ function __contentAdminMenuKb(db, node, hasDraft, hasConflict = false) {
     rows.push([{ text: "👥 Users", callback_data: "A|USERS|1" }]);
     rows.push([{ text: "📈 Statistics", callback_data: "A|STAT" }]);
     rows.push([{ text: "📊 Polls", callback_data: "A|POLL_LIST|1" }]);
-    rows.push([{ text: "⚙️ Welcome Settings", callback_data: "A|WELCOME" }]);
+    rows.push([{ text: "⚙️ Welcome Settings", callback_data: "A|WELCOME" }, { text: "🔎 Search fields", callback_data: "A|SF" }]);
     rows.push([{ text: "📣 Broadcast", callback_data: "A|BC_MENU" }]);
   }
 
@@ -6200,7 +6382,7 @@ async function handleAdminCallback(env, q, bag) {
     }
     if (op === "SQ_HELP") {
       await tgSend(env, chat_id,
-        "🔎 Search name help\n\nFormat [value].field (any parts, any order):\n" + __SEARCH_SYNTAX_HINT + "\n\n[MA].s = subject   [Lec].t = type   [2].n = number   [3].l = level   [1].sem = semester   [Final].v = variant\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”. Level / Semester are taken from the folders when you leave them out.\n\n" + codesHelpText(SEARCH_DICTIONARY),
+        "🔎 Search name help\n\nFormat — any parts, any order, any field:\n[value].field  e.g.  " + __SEARCH_SYNTAX_HINT + "  or  [SCHEDULE].t [3].l [1].sem\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”.\nA field that is not in the list below is still stored as custom text.\n\n" + codesHelpText(SEARCH_CFG_STATE.cfg),
         { noScope: true });
       return true;
     }
@@ -6673,6 +6855,11 @@ async function handleAdminCallback(env, q, bag) {
       return true;
     }
 
+    // --- Search fields (display & order) ---
+    if (op === "SF" || op.startsWith("SF_")) {
+      if (await __sfCallback(env, adminId, op, parts)) return true;
+    }
+
     // --- Welcome Management ---
     if (op === "WELCOME") {
       const kb = {
@@ -7109,6 +7296,17 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
         return true;
       }
 
+      if (pend.mode === "SF_REN" || pend.mode === "SF_WRD" || pend.mode === "SF_ADD") {
+        // "retry" = the answer was rejected and explained: keep waiting. Otherwise the prompt is finished.
+        const res = await __sfHandleText(env, chat_id, pend, (m.text || "").trim());
+        if (res !== "retry") {
+          const nextStateSf = __contentClearContentPending(state.session && state.session.state || {});
+          await __contentSessionPut(env, chat_id, state.base_version, db, state.base_db, { state: nextStateSf, forceActive: true, existingSession: state.session });
+          if (state.session) { state.session.state = nextStateSf; state.session.draft = db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
+        }
+        return true;
+      }
+
       if (pend.mode === "SEARCH_NAME_Q" || pend.mode === "SEARCH_NAME_DRAFT") {
         const isQ = pend.mode === "SEARCH_NAME_Q";
         const raw = (m.text || "").trim();
@@ -7139,12 +7337,11 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
             await tgSend(env, chat_id, "⚠️ Please send the search name as text, or tap ⏭ Skip.", { reply_markup: __searchPromptKb(), noScope: true });
             return true;
           } else {
-            const r = parseAdminSearchInput(raw);
+            const r = parseAdminSearchInput(raw, SEARCH_CFG_STATE.cfg);
             if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __searchPromptKb(), noScope: true }); return true; }
             const qf = fileId ? (node.files || []).find(x => String(x.id) === String(fileId)) : null;
-            const fullMeta = completeMetaFromPath(r.meta, __nodePathNames(db, node.id));
-            if (qf) { __setFileSearch(qf, r.name, fullMeta); __bumpDraftRev(db); setNow = true; }
-            prefix = "✅ " + describeMeta(fullMeta, SEARCH_DICTIONARY) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "");
+            if (qf) { __setFileSearch(qf, r.name, r.meta); __bumpDraftRev(db); setNow = true; }
+            prefix = "✅ " + describeMeta(r.meta, SEARCH_CFG_STATE.cfg) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "");
           }
           const doneN = doneBefore + (setNow ? 1 : 0);
           const nextPos = pos + 1;
@@ -7172,12 +7369,11 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
           await showManageList(env, chat_id, db);
           return true;
         }
-        const r = parseAdminSearchInput(raw);
+        const r = parseAdminSearchInput(raw, SEARCH_CFG_STATE.cfg);
         if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __pendingKb(false), noScope: true }); return true; }
-        const fullMeta = completeMetaFromPath(r.meta, __nodePathNames(db, node.id));
-        __setFileSearch(f, r.name, fullMeta); __bumpDraftRev(db);
+        __setFileSearch(f, r.name, r.meta); __bumpDraftRev(db);
         await persist(clearedState());
-        await tgSend(env, chat_id, "✅ Search name set in draft: " + describeMeta(fullMeta, SEARCH_DICTIONARY) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "") + "\nClick Save to apply.");
+        await tgSend(env, chat_id, "✅ Search name set in draft: " + describeMeta(r.meta, SEARCH_CFG_STATE.cfg) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "") + "\nClick Save to apply.");
         await showManageList(env, chat_id, db);
         return true;
       }
@@ -7189,6 +7385,312 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
       return true;
     }
   }
+}
+
+/* ============================================================================
+   SEARCH FIELDS — admin management (display + order), fully from the bot
+   ----------------------------------------------------------------------------
+   Everything an admin can tune about how the structured search looks:
+     🧩 Card layout   up to 5 fields shown side by side on every file card, in the chosen order
+                      (+ style: full / short / labeled)
+     📋 Filters order the order of the dependent filter chain, and which fields have a filter
+     🏷 Fields        rename a label, set the words people can type, add or remove a custom field
+   Settings live in the search_config table (see __searchCfgSave) — not in the content draft — and take
+   effect immediately for the bot and within ~30 s for the Mini App. Stored file metadata is never touched.
+   ============================================================================ */
+const __SF_STYLE_LABEL = { full: "Full (Managerial Accounting · Lecture · #2)", short: "Short (MA · LEC · 2)", labeled: "Labeled (Subject: MA)" };
+
+async function __sfRaw(env) {
+  const st = await __searchCfgLoad(env, true);
+  const raw = st.ov ? JSON.parse(JSON.stringify(st.ov)) : { v: 1, rev: 0, fields: {}, card: [], cardStyle: "full" };
+  raw.fields = raw.fields || {}; raw.card = raw.card || []; raw.cardStyle = raw.cardStyle || "full";
+  return raw;
+}
+// keys that exist in the stored files (including ones nobody registered) + the richest sample
+async function __sfSeen(env, adminId) {
+  const keys = new Set();
+  let sample = null, best = 0;
+  try {
+    const st = await __contentGetWorkingDraft(env, adminId, { fresh: false });
+    for (const n of Object.values(st.db.nodes || {})) for (const f of (n.files || [])) {
+      const m = f && f.search_meta;
+      if (!m || typeof m !== "object") continue;
+      const ks = Object.keys(m);
+      for (const k of ks) keys.add(k);
+      if (ks.length > best) { best = ks.length; sample = m; }
+    }
+  } catch (_) {}
+  return { keys: [...keys], sample };
+}
+function __sfCtx(raw, seenKeys) {
+  const cfg = applyOverrides(defaultConfig(), raw);
+  const all = knownFieldKeys(cfg, seenKeys);
+  const entries = [{ meta: Object.fromEntries(seenKeys.map((k) => [k, 1])) }];
+  const visible = filterFieldOrder(entries, cfg).filter((k) => all.includes(k));
+  const hidden = all.filter((k) => !visible.includes(k));
+  return { cfg, all, visible, hidden, label: (k) => fieldLabel(k, cfg) };
+}
+async function __sfSave(env, raw) {
+  const st = await __searchCfgSave(env, raw);
+  return st;
+}
+const __sfKb = (rows) => ({ inline_keyboard: rows });
+const __sfPairs = (btns) => { const rows = []; for (let i = 0; i < btns.length; i += 2) rows.push(btns.slice(i, i + 2)); return rows; };
+
+async function __sfShowMain(env, adminId, note) {
+  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const chips = (raw.card || []).map((k) => cx.label(k)).join("  |  ") || "— (none)";
+  const order = cx.visible.map((k) => cx.label(k)).join(" → ") || "—";
+  const text = (note ? note + "\n\n" : "") +
+    "🔎 Search fields\n\n" +
+    "🧩 Card (side by side, max " + MAX_CARD_FIELDS + "): " + chips + "\n" +
+    "🎨 Card style: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle) + "\n" +
+    "📋 Filters order: " + order + (cx.hidden.length ? "\n🙈 No filter: " + cx.hidden.map(cx.label).join(", ") : "") + "\n\n" +
+    "Changes apply immediately (the Mini App refreshes within ~30 seconds). File metadata is never changed here.";
+  await tgSend(env, adminId, text, { reply_markup: __sfKb([
+    [{ text: "🧩 Card layout", callback_data: "A|SF_CARD" }, { text: "📋 Filters order", callback_data: "A|SF_FIL" }],
+    [{ text: "🏷 Fields & labels", callback_data: "A|SF_FLD" }, { text: "➕ Add field", callback_data: "A|SF_ADD" }],
+    [{ text: "🔄 Reset to defaults", callback_data: "A|SF_RESET" }],
+    [{ text: "⬅️ Back to Main Menu", callback_data: "A|HOME" }]
+  ]) });
+}
+
+async function __sfShowCard(env, adminId, note) {
+  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const sampleMeta = seen.sample || { s: "MA", t: "LEC", n: 2, l: 3, sem: 1 };
+  const prev = cardChips(sampleMeta, cx.cfg).map((c) => c.text).join("  |  ") || "(nothing on the card)";
+  const on = raw.card || [];
+  const rows = __sfPairs(cx.all.map((k) => ({ text: (on.includes(k) ? "☑ " : "☐ ") + cx.label(k), callback_data: "A|SF_CT|" + k })));
+  on.forEach((k, i) => {
+    rows.push([
+      { text: (i + 1) + ". " + cx.label(k) + "  ⬆️", callback_data: "A|SF_CU|" + k },
+      { text: "⬇️", callback_data: "A|SF_CD|" + k }
+    ]);
+  });
+  rows.push([{ text: "🎨 Style: " + (raw.cardStyle || "full"), callback_data: "A|SF_ST" }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
+  await tgSend(env, adminId, (note ? note + "\n\n" : "") +
+    "🧩 Card layout\nTick up to " + MAX_CARD_FIELDS + " fields to show side by side on each file card. Use ⬆️/⬇️ to order them.\n\n" +
+    "Preview: " + prev + "\nStyle: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle), { reply_markup: __sfKb(rows) });
+}
+
+async function __sfShowFilters(env, adminId, note) {
+  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const rows = [];
+  cx.visible.forEach((k, i) => {
+    rows.push([
+      { text: (i + 1) + ". " + cx.label(k), callback_data: "A|SF_ONE|" + k },
+      { text: "⬆️", callback_data: "A|SF_FU|" + k },
+      { text: "⬇️", callback_data: "A|SF_FD|" + k },
+      { text: "🙈", callback_data: "A|SF_FT|" + k }
+    ]);
+  });
+  for (const k of cx.hidden) rows.push([{ text: "🙈 " + cx.label(k) + " (no filter)", callback_data: "A|SF_ONE|" + k }, { text: "👁 Show", callback_data: "A|SF_FT|" + k }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
+  await tgSend(env, adminId, (note ? note + "\n\n" : "") +
+    "📋 Filters order\nThe filter drop-downs follow this order, and each one only lists values left by the ones above it. ⬆️/⬇️ moves a field, 🙈 removes its filter.", { reply_markup: __sfKb(rows) });
+}
+
+async function __sfShowFields(env, adminId, note) {
+  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const rows = __sfPairs(cx.all.map((k) => ({ text: cx.label(k) + " (" + k + ")" + (isBuiltInField(k) ? "" : " ✦"), callback_data: "A|SF_ONE|" + k })));
+  rows.push([{ text: "➕ Add field", callback_data: "A|SF_ADD" }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
+  await tgSend(env, adminId, (note ? note + "\n\n" : "") + "🏷 Fields\nTap a field to rename it or change the words that find it. ✦ = custom field (found in your files or added by you).", { reply_markup: __sfKb(rows) });
+}
+
+async function __sfShowOne(env, adminId, key, note) {
+  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  if (!cx.all.includes(key)) { await __sfShowFields(env, adminId, "⚠️ Unknown field."); return; }
+  const f = cx.cfg.fields[key] || {};
+  const card = (raw.card || []).indexOf(key);
+  const fpos = cx.visible.indexOf(key);
+  const lines = [
+    "🏷 " + cx.label(key) + "   (key: " + key + ")",
+    "Type: " + (isBuiltInField(key) ? "built-in " : "custom ") + fieldKind(key, cx.cfg),
+    "Search words: " + ((f.words || []).join(", ") || "— (use " + key + ":value)"),
+    "Filter: " + (fpos >= 0 ? "on, position " + (fpos + 1) : "off"),
+    "Card: " + (card >= 0 ? "position " + (card + 1) : "not on the card")
+  ];
+  const rows = [
+    [{ text: "✏️ Rename", callback_data: "A|SF_REN|" + key }, { text: "💬 Search words", callback_data: "A|SF_WRD|" + key }],
+    [{ text: card >= 0 ? "➖ Remove from card" : "➕ Put on card", callback_data: "A|SF_CT|" + key + "|o" }, { text: fpos >= 0 ? "🙈 Hide filter" : "👁 Show filter", callback_data: "A|SF_FT|" + key + "|o" }]
+  ];
+  if (!isBuiltInField(key) && raw.fields[key]) rows.push([{ text: "🗑 Remove this field setting", callback_data: "A|SF_DEL|" + key }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "A|SF_FLD" }]);
+  await tgSend(env, adminId, (note ? note + "\n\n" : "") + lines.join("\n"), { reply_markup: __sfKb(rows) });
+}
+
+async function __sfAskText(env, adminId, mode, extra, prompt) {
+  const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
+  const nextState = { ...(state.session && state.session.state || {}), pending: { panel_mid: __panelMid(adminId), mode, ...extra } };
+  await __contentSessionPut(env, adminId, state.base_version, state.db, state.base_db, { state: nextState, forceActive: true, existingSession: state.session });
+  if (state.session) { state.session.state = nextState; state.session.draft = state.db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
+  await tgSend(env, adminId, prompt, { reply_markup: __pendingKb(false) });
+}
+
+// Reject a change that would introduce a NEW ambiguity (same word for two fields, or a filler word).
+function __sfNewProblems(oldRaw, newRaw) {
+  const probs = (raw) => {
+    const out = new Set();
+    try {
+      const cfg = applyOverrides(defaultConfig(), raw);
+      for (const p of validateConfig(cfg).problems) out.add(p);
+      const owner = new Map();                                  // a typed word may belong to ONE field only
+      for (const [k, f] of Object.entries(cfg.fields)) {
+        for (const w of f.words || []) {
+          const nw = String(w).toLowerCase();
+          if (owner.has(nw) && owner.get(nw) !== k) out.add("the word “" + nw + "” already finds the field “" + owner.get(nw) + "”");
+          else owner.set(nw, k);
+        }
+      }
+    } catch (_) {}
+    return out;
+  };
+  const before = probs(oldRaw);
+  return [...probs(newRaw)].filter((p) => !before.has(p));
+}
+
+async function __sfCallback(env, adminId, op, parts) {
+  const key = String(parts[2] || "").toLowerCase();
+  const fromOne = parts[3] === "o";                       // pressed on the field page => go back there
+  const raw = await __sfRaw(env);
+  const done = async (note) => {
+    if (fromOne) return __sfShowOne(env, adminId, key, note);
+    if (op.startsWith("SF_C") || op === "SF_ST") return __sfShowCard(env, adminId, note);
+    if (op.startsWith("SF_F")) return __sfShowFilters(env, adminId, note);
+    return __sfShowMain(env, adminId, note);
+  };
+
+  if (op === "SF") { await __sfShowMain(env, adminId); return true; }
+  if (op === "SF_CARD") { await __sfShowCard(env, adminId); return true; }
+  if (op === "SF_FIL") { await __sfShowFilters(env, adminId); return true; }
+  if (op === "SF_FLD") { await __sfShowFields(env, adminId); return true; }
+  if (op === "SF_ONE") { await __sfShowOne(env, adminId, key); return true; }
+
+  if (op === "SF_CT") {
+    raw.card = raw.card || [];
+    const i = raw.card.indexOf(key);
+    if (i >= 0) raw.card.splice(i, 1);
+    else {
+      if (raw.card.length >= MAX_CARD_FIELDS) { await done("⚠️ A card shows at most " + MAX_CARD_FIELDS + " fields. Remove one first."); return true; }
+      raw.card.push(key);
+      const seen = await __sfSeen(env, adminId);
+      if (!knownFieldKeys(defaultConfig(), seen.keys).includes(key) && !raw.fields[key]) { await done("⚠️ Unknown field."); return true; }
+    }
+    await __sfSave(env, raw); await done("✅ Card updated."); return true;
+  }
+  if (op === "SF_CU" || op === "SF_CD") {
+    const i = (raw.card || []).indexOf(key);
+    const j = op === "SF_CU" ? i - 1 : i + 1;
+    if (i >= 0 && j >= 0 && j < raw.card.length) { [raw.card[i], raw.card[j]] = [raw.card[j], raw.card[i]]; await __sfSave(env, raw); }
+    await done(); return true;
+  }
+  if (op === "SF_ST") {
+    const i = CARD_STYLES.indexOf(raw.cardStyle || "full");
+    raw.cardStyle = CARD_STYLES[(i + 1) % CARD_STYLES.length];
+    await __sfSave(env, raw); await done("✅ Style: " + (__SF_STYLE_LABEL[raw.cardStyle])); return true;
+  }
+  if (op === "SF_FU" || op === "SF_FD") {
+    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const order = cx.visible.slice();
+    const i = order.indexOf(key), j = op === "SF_FU" ? i - 1 : i + 1;
+    if (i >= 0 && j >= 0 && j < order.length) {
+      [order[i], order[j]] = [order[j], order[i]];
+      order.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
+      await __sfSave(env, raw);
+    }
+    await done(); return true;
+  }
+  if (op === "SF_FT") {
+    const cur = raw.fields[key] || {};
+    if (cur.filter === false) delete cur.filter; else cur.filter = false;
+    raw.fields[key] = cur;
+    await __sfSave(env, raw); await done("✅ Filter " + (cur.filter === false ? "hidden" : "shown") + "."); return true;
+  }
+  if (op === "SF_REN") {
+    await __sfAskText(env, adminId, "SF_REN", { key }, "✏️ Send the new label for “" + key + "” (up to 30 characters). Example: Doctor\nIt is only the displayed name; stored data does not change.");
+    return true;
+  }
+  if (op === "SF_WRD") {
+    await __sfAskText(env, adminId, "SF_WRD", { key }, "💬 Send the words that should find “" + key + "” in the search box, separated by commas. Example: doctor, dr\n(So typing “dr ahmed” filters this field.)\nSend - to clear them (the key:value form still works).");
+    return true;
+  }
+  if (op === "SF_ADD") {
+    await __sfAskText(env, adminId, "SF_ADD", {}, "➕ New field. Send:  key  label  [text|number]\nExamples:\n• doctor Doctor\n• year Year number\nKey = letters/digits/_ (max 24). Admins then tag files with [Dr Ahmed].doctor. Files keep working without it.");
+    return true;
+  }
+  if (op === "SF_DEL") {
+    delete raw.fields[key];
+    raw.card = (raw.card || []).filter((k) => k !== key);
+    await __sfSave(env, raw); await __sfShowFields(env, adminId, "✅ Setting removed. Values already stored in files are kept."); return true;
+  }
+  if (op === "SF_RESET") {
+    await tgSend(env, adminId, "🔄 Reset every field label, order, card layout and custom field to the defaults?\nFile metadata is not touched.", { reply_markup: __sfKb([
+      [{ text: "✅ Yes, reset", callback_data: "A|SF_RESET2" }, { text: "✖️ No", callback_data: "A|SF" }]
+    ]) });
+    return true;
+  }
+  if (op === "SF_RESET2") {
+    await __sfSave(env, { v: 1, fields: {}, card: [], cardStyle: "full" });
+    await __sfShowMain(env, adminId, "✅ Reset to defaults."); return true;
+  }
+  return false;
+}
+
+// Text answers for the three prompts above. Returns true when handled.
+async function __sfHandleText(env, chat_id, pend, text) {
+  const t = String(text || "").trim();
+  const low = t.toLowerCase();
+  const back = async (note) => {
+    if (pend.mode === "SF_ADD") return __sfShowMain(env, chat_id, note);
+    return __sfShowOne(env, chat_id, String(pend.key || ""), note);
+  };
+  if (!t || low === "/cancel" || low === "/done") { await back("Cancelled."); return true; }
+  const raw = await __sfRaw(env);
+  const seen = await __sfSeen(env, chat_id);
+
+  if (pend.mode === "SF_REN") {
+    const key = String(pend.key || "");
+    const label = t.replace(/[\u0000-\u001f<>]/g, "").slice(0, 30).trim();
+    if (!label) { await tgSend(env, chat_id, "⚠️ Empty label. Send a label or Cancel.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    raw.fields[key] = { ...(raw.fields[key] || {}), label };
+    await __sfSave(env, raw);
+    await back("✅ Renamed to “" + label + "”.");
+    return true;
+  }
+  if (pend.mode === "SF_WRD") {
+    const key = String(pend.key || "");
+    const words = t === "-" ? [] : t.split(/[,\n،]/).map((x) => x.trim()).filter(Boolean).slice(0, 8);
+    const next = JSON.parse(JSON.stringify(raw));
+    next.fields[key] = { ...(next.fields[key] || {}), words };
+    const probs = __sfNewProblems(raw, next);
+    if (probs.length) { await tgSend(env, chat_id, "⚠️ Not saved:\n• " + probs.join("\n• ") + "\n\nSend other words, or Cancel.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    await __sfSave(env, next);
+    await back(words.length ? "✅ Search words: " + words.join(", ") : "✅ Search words cleared.");
+    return true;
+  }
+  if (pend.mode === "SF_ADD") {
+    const m = /^([A-Za-z][A-Za-z0-9_]{0,23})\s+(.+)$/.exec(t.replace(/\s+/g, " "));
+    if (!m) { await tgSend(env, chat_id, "⚠️ Format:  key  label  [text|number]\nExample: year Year number", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    const key = m[1].toLowerCase();
+    let rest = m[2].trim(), kind = "text";
+    const km = /\s(text|number)$/i.exec(" " + rest);
+    if (km) { kind = km[1].toLowerCase(); rest = rest.slice(0, rest.length - km[1].length).trim(); }
+    const label = rest.replace(/[\u0000-\u001f<>]/g, "").slice(0, 30).trim();
+    const known = knownFieldKeys(applyOverrides(defaultConfig(), raw), seen.keys);
+    if (!label) { await tgSend(env, chat_id, "⚠️ The label is empty.", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (known.includes(key) && (isBuiltInField(key) || raw.fields[key])) { await tgSend(env, chat_id, "⚠️ “" + key + "” already exists. Pick another key (or rename the existing field).", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    if (Object.keys(raw.fields).filter((k) => !isBuiltInField(k)).length >= 20) { await tgSend(env, chat_id, "⚠️ Too many custom fields (max 20).", { reply_markup: __pendingKb(false), noScope: true }); return "retry"; }
+    const next = JSON.parse(JSON.stringify(raw));
+    next.fields[key] = { label, kind, words: key.length >= 3 ? [key] : [], ...(kind === "number" && /year/.test(key) ? { max: 2200 } : {}) };
+    let note = "";
+    if (__sfNewProblems(raw, next).length) { next.fields[key].words = []; note = "\n(No natural-language word: it clashes with another field. Use " + key + ":value.)"; }
+    await __sfSave(env, next);
+    await __sfShowOne(env, chat_id, key, "✅ Field added: " + label + " (" + kind + ")." + note + "\nTag files with  [value]." + key);
+    return true;
+  }
+  return false;
 }
 
 /* ============================================================================
@@ -8589,6 +9091,7 @@ const REQ_CTX = Symbol.for("bot.requestCtx");
 function withRequestCtx(rawEnv, ctx) {
   try {
     if (!rawEnv || !ctx || typeof ctx.waitUntil !== "function") return rawEnv;
+    if (rawEnv[REQ_CTX]) return rawEnv; // already a per-request view (created by timedFetch)
     const e = Object.create(rawEnv);
     Object.defineProperty(e, REQ_CTX, { value: ctx, enumerable: false });
     return e;
@@ -8609,6 +9112,8 @@ function reqCtx(env) {
 // Master switch for chat-activity monitoring (forwarding user messages, button presses and bot replies
 // to the monitor admin). OFF by design: only Mini App opens are monitored. Set to true to bring it back.
 const MONITOR_CHAT_ACTIVITY = false;
+// Shown by the admin command /monitor, so you can see which version is really deployed.
+const BUILD_ID = "fast-2026-10-15-g (perf)";
 
 const MON_CHAINS = new Map();
 function monitorOutgoing(env, sourceChatId, messageIds) {
@@ -8686,8 +9191,10 @@ async function monitorMiniAppOpen(env, user) {
 
     const monitorAdminId = getMonitorAdminId(env);
     const uid = Number(user && user.id) || 0;
+    // The monitor admin opening the app is the only open that is never reported (the notice would go to himself).
+    // Other admins ARE reported (tagged), so testing the app with an admin account visibly works.
     if (!monitorAdminId || !uid || uid === Number(monitorAdminId)) return;
-    if (parseAdmins(env).includes(uid)) return;
+    const isAdminUser = parseAdmins(env).includes(uid);
 
     const now = Date.now();
 
@@ -8715,23 +9222,51 @@ async function monitorMiniAppOpen(env, user) {
     const usernameLink = rawUsername
       ? `<a href="https://t.me/${encodeURIComponent(rawUsername)}">${safeUsername}</a>`
       : "-";
-    const lang = user && user.language_code ? htmlEscape(String(user.language_code)) : "";
+    const langRaw = user && user.language_code ? String(user.language_code) : "";
+    const premium = user && user.is_premium ? " · Premium ⭐" : "";
 
-    const text =
-      `📱 <b>Mini App Opened</b>\n` +
+    const html =
+      `📱 <b>Mini App Opened</b>${isAdminUser ? " 👑 admin" : ""}\n` +
       `User: ${nameLink}\n` +
       `ID: ${idLink}\n` +
       `Username: ${usernameLink}\n` +
-      (lang ? `Language: ${lang}${user && user.is_premium ? " · Premium ⭐" : ""}\n` : "") +
+      (langRaw ? `Language: ${htmlEscape(langRaw)}${premium}\n` : "") +
       `Time: ${htmlEscape(time)}`;
 
-    // Send directly to the monitoring admin so this remains a dedicated monitor event,
-    // without entering the admin-panel message scope.
-    await tgFetchWithTimeout(TG(env) + "/sendMessage", {
-      method: "POST",
-      headers: CTH,
-      body: JSON.stringify({ chat_id: monitorAdminId, text, parse_mode: "HTML", disable_web_page_preview: true })
-    }, 10000);
+    // Plain-text twin used only if Telegram refuses the HTML version, so the notice is never lost.
+    const plain =
+      `📱 Mini App Opened${isAdminUser ? " 👑 admin" : ""}\n` +
+      `User: ${name}\n` +
+      `ID: ${uid}\n` +
+      `Username: ${rawUsername ? "https://t.me/" + rawUsername : "-"}\n` +
+      (langRaw ? `Language: ${langRaw}${premium}\n` : "") +
+      `Time: ${time}`;
+
+    // Sent straight to the monitoring admin (a dedicated monitor event, outside the admin-panel scope).
+    // The Telegram answer IS checked now: a rejected notice is retried (plain text / flood wait) and any
+    // final failure is logged instead of disappearing silently.
+    let useHtml = true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const payload = useHtml
+        ? { chat_id: monitorAdminId, text: html, parse_mode: "HTML", disable_web_page_preview: true }
+        : { chat_id: monitorAdminId, text: plain, disable_web_page_preview: true };
+      let j = null;
+      try {
+        const res = await tgFetchWithTimeout(TG(env) + "/sendMessage", { method: "POST", headers: CTH, body: JSON.stringify(payload) }, 10000);
+        j = await res.json().catch(() => null);
+      } catch (e) {
+        console.error("MINIAPP_OPEN_MONITOR_FETCH_ERROR", e && e.message ? e.message : String(e));
+      }
+      if (j && j.ok) return;
+
+      const desc = String((j && j.description) || "no response");
+      const ra = Number(j && j.parameters && j.parameters.retry_after) || 0;
+      console.error("MINIAPP_OPEN_MONITOR_FAILED", "uid=" + uid, "code=" + (j && j.error_code), desc);
+      if (useHtml && /parse|entit/i.test(desc)) { useHtml = false; continue; }
+      if (ra > 0 && ra <= 3) { await new Promise((r) => setTimeout(r, ra * 1000 + 100)); continue; }
+      if (!j) continue; // network error / timeout: one more try
+      return;
+    }
   } catch (e) {
     console.error("MINIAPP_OPEN_MONITOR_ERROR", e && e.message ? e.message : String(e));
   }
@@ -9165,7 +9700,7 @@ function registerGatedUser(env, ctx, tgFrom, msg, counters, definitelyNotMember)
 const ADMIN_SCOPES = new Map();       // chat_id -> active interaction scope (only while a handler runs)
 const ADMIN_LAST_PANEL = new Map();   // chat_id -> message_id of the last panel this isolate showed
 const __NOTICE_SEP = "\n─────────\n";
-const __CLEAN_INPUT_MODES = new Set(["ADD", "REN", "EDIT_CAP_DRAFT", "W_EDIT_CAP_DRAFT", "WELCOME_TEXT", "SEARCH_NAME_DRAFT", "SEARCH_NAME_Q"]);
+const __CLEAN_INPUT_MODES = new Set(["ADD", "REN", "EDIT_CAP_DRAFT", "W_EDIT_CAP_DRAFT", "WELCOME_TEXT", "SEARCH_NAME_DRAFT", "SEARCH_NAME_Q", "SF_REN", "SF_WRD", "SF_ADD"]);
 
 function __panelMid(chatId) {
   const sc = ADMIN_SCOPES.get(String(chatId));
@@ -9286,25 +9821,16 @@ const __SEARCH_SYNTAX_HINT = "[MA].s [Lec].t [2].n";
 
 // Set (or clear when name/meta are empty) the search identity of ONE file placement in the draft.
 // It is per placement on purpose: the same Telegram file may sit in several folders with different identities.
-// `pathNames` (optional, folder names root -> leaf) completes the meta with what the tree already says
-// (Level / Semester / schedule variant ...). Values typed by the admin always win.
-function __setFileSearch(f, name, meta, pathNames) {
+function __setFileSearch(f, name, meta) {
   if (!f) return false;
-  const m = pathNames && meta ? completeMetaFromPath(meta, pathNames) : normalizeSearchMeta(meta);
+  const m = normalizeSearchMeta(meta, SEARCH_CFG_STATE.cfg);
   if (name && m) { f.search_name = String(name).slice(0, 120); f.search_meta = m; }
   else { delete f.search_name; delete f.search_meta; }
   return true;
 }
 
 function __searchShort(meta) {
-  return shortMeta(meta);
-}
-
-// Folder names root -> leaf of a node in the draft (used to derive Level / Semester / variant).
-function __nodePathNames(db, nodeId) {
-  try {
-    return buildPathToNode(db, nodeId).map((id) => String((db.nodes[String(id)] || {}).name || ""));
-  } catch (_) { return []; }
+  return shortMeta(meta, SEARCH_CFG_STATE.cfg);
 }
 
 function __searchFileLabel(f) {

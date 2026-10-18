@@ -24,7 +24,7 @@ const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;     // reopen the app from the bot af
 const SEND_COOLDOWN_MS = 5000;                 // min gap between two sends of the same user (per isolate)
 const SEND_HOURLY_CAP = 40;                    // max sends / user / hour (per isolate)
 const GAP_BETWEEN_TG_CALLS_MS = 350;           // wall-clock pause only (no CPU), keeps Telegram flood limits happy
-const SLIM_BUILD_REV = 4;                      // rev 3: adds `sm` (structured search metadata) per file; rev 4: `sm` carries ANY field (field-agnostic search)
+const SLIM_BUILD_REV = 4;                      // rev 4: `sm` is generic (any fields), no longer limited to s/t/n
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const enc = new TextEncoder();
@@ -104,7 +104,7 @@ async function verifyInitData(initData, botToken) {
 // ----------------------------------------------------------------------------
 // Slim content (built once per isolate per version, then served as a ready string)
 // ----------------------------------------------------------------------------
-function buildSlim(db) {
+function buildSlim(db, sc) {
   const nodes = db.nodes || {};
   const rootId = String(db.root_id || 1);
   const out = {};
@@ -144,11 +144,10 @@ function buildSlim(db) {
       if (f.caption) item.c = String(f.caption).slice(0, 300);
       if (f.file_name) item.nm = String(f.file_name).slice(0, 200);
       if (f.file_size) item.s = Number(f.file_size) || undefined;
-      // Structured search metadata: a flat object with ANY fields ({s,t,n,l,sem,v,doctor,...}); the
-      // shared core normalizes it without knowing the field names. Optional: legacy files have none.
-      // Only the normalized machine data is shipped (the admin's raw search_name stays server-side),
-      // and Telegram file_ids are still never exposed.
-      const sm = normalizeSearchMeta(f.search_meta);
+      // Structured search metadata: ANY fields ({s,t,n,l,sem,v,doctor,...}), kept generically.
+      // Optional: legacy files simply have none. Only the normalized machine data is shipped
+      // (the admin's raw search_name stays server-side) and Telegram file_ids are never exposed.
+      const sm = normalizeSearchMeta(f.search_meta, sc && sc.cfg);
       if (sm) item.sm = sm;
       slimFiles.push(item);
       fileCount++;
@@ -163,15 +162,17 @@ function buildSlim(db) {
   }
 
   const v = Number(db._v) || 0;
-  const payload = { ok: true, v: v + "." + SLIM_BUILD_REV, root: Number(rootId), max: MAX_TOTAL_ITEMS, nodes: out, files: fileCount };
+  const payload = { ok: true, v: v + "." + SLIM_BUILD_REV + (sc && sc.rev ? ".c" + sc.rev : ""), root: Number(rootId), max: MAX_TOTAL_ITEMS, nodes: out, files: fileCount };
+  // Admin-managed search display config (labels, filter order, card fields). Omitted when unchanged defaults.
+  if (sc && sc.ov) payload.cfg = sc.ov;
   return { v: payload.v, json: JSON.stringify(payload), ids };
 }
 
-async function getSlim(db) {
+async function getSlim(db, sc) {
   const g = globalThis;
-  const v = (Number(db && db._v) || 0) + "." + SLIM_BUILD_REV;
+  const v = (Number(db && db._v) || 0) + "." + SLIM_BUILD_REV + (sc && sc.rev ? ".c" + sc.rev : "");
   if (g.__MINI_SLIM && g.__MINI_SLIM.v === v && g.__MINI_SLIM.src === db) return g.__MINI_SLIM;
-  const slim = buildSlim(db);
+  const slim = buildSlim(db, sc);
   slim.src = db;
   g.__MINI_SLIM = slim;
   return slim;
@@ -208,19 +209,14 @@ async function authorize(request, env, ctx, deps) {
   const user = v.user;
   const uid = Number(user.id);
 
-  // The ban lookup and the membership check are independent, so they run in parallel (one network wait
-  // instead of two on a cold cache). Decision order is unchanged: banned first, then membership.
-  const isAdmin = deps.isAdmin(env, uid);
-  const needMembership = !isAdmin && deps.membershipConfigured(env);
-  const [blocked, m] = await Promise.all([
-    Promise.resolve().then(() => deps.getBlockedMode(env, uid, ctx)).catch(() => 0),
-    needMembership
-      ? Promise.resolve().then(() => deps.checkMembership(env, uid)).catch(() => ({ ok: false }))
-      : Promise.resolve(null)
-  ]);
+  let blocked = 0;
+  try { blocked = await deps.getBlockedMode(env, uid, ctx); } catch (_) {}
   if (blocked) return { res: jsonRes({ ok: false, error: "banned" }, 403) };
-  if (needMembership) {
-    if (!m || !m.ok) return { res: jsonRes({ ok: false, error: "membership_unavailable" }, 503) };
+
+  const isAdmin = deps.isAdmin(env, uid);
+  if (!isAdmin && deps.membershipConfigured(env)) {
+    const m = await deps.checkMembership(env, uid);
+    if (!m.ok) return { res: jsonRes({ ok: false, error: "membership_unavailable" }, 503) };
     if (!m.member) return { res: jsonRes({ ok: false, error: "not_member" }, 403) };
   }
   return { user, uid, isAdmin };
@@ -243,7 +239,9 @@ async function handleContent(request, env, ctx, url, deps) {
 
   const db = await deps.loadContent(env, ctx);
   if (!db || !deps.integrity(db)) return jsonRes({ ok: false, error: "content_unavailable" }, 503);
-  const slim = await getSlim(db);
+  let sc = null;
+  try { sc = deps.searchConfig ? await deps.searchConfig(env) : null; } catch (_) { sc = null; }
+  const slim = await getSlim(db, sc);
 
   if (url.searchParams.get("v") === slim.v) return jsonRes({ ok: true, same: true, v: slim.v });
   return new Response(slim.json, { status: 200, headers: JSON_HEADERS });
@@ -313,7 +311,9 @@ async function handleSend(request, env, ctx, deps) {
 
   const db = await deps.loadContent(env, ctx);
   if (!db || !deps.integrity(db)) return jsonRes({ ok: false, error: "content_unavailable" }, 503);
-  const slim = await getSlim(db);
+  let sc = null;
+  try { sc = deps.searchConfig ? await deps.searchConfig(env) : null; } catch (_) { sc = null; }
+  const slim = await getSlim(db, sc);
 
   // Resolve against the published snapshot (visible nodes only). file_ids stay server-side.
   const resolved = [];
