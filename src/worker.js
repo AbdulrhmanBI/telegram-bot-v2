@@ -7391,7 +7391,7 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
    SEARCH FIELDS — admin management (display + order), fully from the bot
    ----------------------------------------------------------------------------
    Everything an admin can tune about how the structured search looks:
-     🧩 Card layout   up to 5 fields shown side by side on every file card, in the chosen order
+     🧩 Card layout   any number of fields shown side by side on every file card, in the chosen order
                       (+ style: full / short / labeled)
      📋 Filters order the order of the dependent filter chain, and which fields have a filter
      🏷 Fields        rename a label, set the words people can type, add or remove a custom field
@@ -7443,7 +7443,7 @@ async function __sfShowMain(env, adminId, note) {
   const order = cx.visible.map((k) => cx.label(k)).join(" → ") || "—";
   const text = (note ? note + "\n\n" : "") +
     "🔎 Search fields\n\n" +
-    "🧩 Card (side by side, max " + MAX_CARD_FIELDS + "): " + chips + "\n" +
+    "🧩 Card (side by side): " + chips + "\n" +
     "🎨 Card style: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle) + "\n" +
     "📋 Filters order: " + order + (cx.hidden.length ? "\n🙈 No filter: " + cx.hidden.map(cx.label).join(", ") : "") + "\n\n" +
     "Changes apply immediately (the Mini App refreshes within ~30 seconds). File metadata is never changed here.";
@@ -7470,7 +7470,7 @@ async function __sfShowCard(env, adminId, note) {
   rows.push([{ text: "🎨 Style: " + (raw.cardStyle || "full"), callback_data: "A|SF_ST" }]);
   rows.push([{ text: "⬅️ Back", callback_data: "A|SF" }]);
   await tgSend(env, adminId, (note ? note + "\n\n" : "") +
-    "🧩 Card layout\nTick up to " + MAX_CARD_FIELDS + " fields to show side by side on each file card. Use ⬆️/⬇️ to order them.\n\n" +
+    "🧩 Card layout\nTick the fields to show side by side on each file card (as many as you like; they wrap onto more lines on a phone). Use ⬆️/⬇️ to order them.\n\n" +
     "Preview: " + prev + "\nStyle: " + (__SF_STYLE_LABEL[raw.cardStyle] || raw.cardStyle), { reply_markup: __sfKb(rows) });
 }
 
@@ -7573,7 +7573,7 @@ async function __sfCallback(env, adminId, op, parts) {
     const i = raw.card.indexOf(key);
     if (i >= 0) raw.card.splice(i, 1);
     else {
-      if (raw.card.length >= MAX_CARD_FIELDS) { await done("⚠️ A card shows at most " + MAX_CARD_FIELDS + " fields. Remove one first."); return true; }
+      if (raw.card.length >= MAX_CARD_FIELDS) { await done("⚠️ Too many fields on the card. Remove one first."); return true; }
       raw.card.push(key);
       const seen = await __sfSeen(env, adminId);
       if (!knownFieldKeys(defaultConfig(), seen.keys).includes(key) && !raw.fields[key]) { await done("⚠️ Unknown field."); return true; }
