@@ -567,7 +567,7 @@ function renderCrumbs(){
 function fileCard(n, f, i, sub){
   const on = inCart(n, f.k);
   const t = ftitle(f, i);
-  const meta = [f.t, fmtSize(f.s)].filter(Boolean).join(" · ");
+  const meta = [fmtSize(f.s)].filter(Boolean).join(" · ");
   const cap = f.nm && f.c ? f.c : "";
   return '<button class="file" data-tg="' + esc(n) + "|" + esc(f.k) + '" aria-pressed="' + on + '">' +
     '<span class="chk" aria-hidden="true">✓</span><span class="ficon" aria-hidden="true">' + icon(f.t) + "</span>" +
@@ -657,7 +657,7 @@ function legacySearch(raw){
 function resultCard(e, title){
   const f = e.f, on = inCart(e.id, f.k);
   const orig = f.nm || (f.c ? f.c.split("\n")[0] : "");
-  const sub = [orig ? orig.slice(0, 80) : "", [f.t, fmtSize(f.s)].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
+  const sub = [orig ? orig.slice(0, 80) : "", [fmtSize(f.s)].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
   return '<button class="file" data-tg="' + esc(e.id) + "|" + esc(f.k) + '" aria-pressed="' + on + '">' +
     '<span class="chk" aria-hidden="true">✓</span><span class="ficon" aria-hidden="true">' + icon(f.t) + "</span>" +
     '<span class="fbody" dir="auto"><span class="ftitle">' + esc(title) + "</span>" +
