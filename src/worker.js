@@ -6862,7 +6862,7 @@ async function handleAdminCallback(env, q, bag) {
         // Show the REAL reason to the admin (and log it) instead of the generic "admin action failed".
         const em = e && e.message ? String(e.message) : String(e);
         console.error("SF_CALLBACK_ERROR:", JSON.stringify({ op, key: parts[2] || null, error: em, stack: e && e.stack ? String(e.stack).slice(0, 1500) : undefined }));
-        await tgSend(env, chat_id, "⚠️ حصلت مشكلة في فلاتر البحث (" + op + ").\nالسبب: " + em.slice(0, 200) + "\n\nتعديلاتك محفوظة في المسودة. جرّب تاني، ولو اتكررت ابعت لي الرسالة دي.", { reply_markup: __sfKb([[{ text: "⬅️ رجوع لفلاتر البحث", callback_data: "A|SF" }]]) });
+        await tgSend(env, chat_id, "⚠️ حصلت مشكلة في فلاتر البحث (" + op + ") [إصدار " + __SF_BUILD + "].\nالسبب: " + em.slice(0, 200) + "\n\nتعديلاتك محفوظة في المسودة. جرّب تاني، ولو اتكررت ابعت لي الرسالة دي.", { reply_markup: __sfKb([[{ text: "⬅️ رجوع لفلاتر البحث", callback_data: "A|SF" }]]) });
         return true;
       }
     }
