@@ -7407,19 +7407,47 @@ function __sfPreview(cx) {
   let i = 0;
   return cx.rows.map((r, ri) => "سطر " + (ri + 1) + ":  " + r.map((k) => __sfN(++i) + " " + cx.label(k)).join("   ")).join("\n");
 }
-const __sfSaveRow = (dirty) => (dirty ? [[{ text: "💾 حفظ", callback_data: "A|SF_SAVE" }, { text: "↩️ تجاهل التعديلات", callback_data: "A|SF_DISCARD" }]] : []);
+// bottom row: 💾 Save + discard appear only when something is unsaved; ⬅️ back is always last
+const __sfBottomRow = (dirty, back) => (dirty
+  ? [{ text: "💾 حفظ", callback_data: "A|SF_SAVE" }, { text: "↩️ تجاهل", callback_data: "A|SF_DISCARD" }, { text: "⬅️ رجوع", callback_data: back }]
+  : [{ text: "⬅️ رجوع", callback_data: back }]);
+// the fields that carry a given key, in the content draft (for deleting a filter completely)
+async function __sfCountField(env, adminId, key) {
+  let n = 0;
+  try {
+    const st = await __contentGetWorkingDraft(env, adminId, { fresh: false });
+    for (const node of Object.values(st.db.nodes || {})) for (const f of (node.files || [])) if (f && f.search_meta && f.search_meta[key] != null) n++;
+  } catch (_) {}
+  return n;
+}
+async function __sfStripField(env, adminId, key) {
+  const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
+  const db = state.db;
+  await __searchCfgLoad(env);
+  const cfg = SEARCH_CFG_STATE.cfg;
+  let n = 0;
+  for (const node of Object.values(db.nodes || {})) for (const f of (node.files || [])) {
+    const m = f && f.search_meta;
+    if (!m || typeof m !== "object" || m[key] == null) continue;
+    const next = { ...m }; delete next[key];
+    const norm = normalizeSearchMeta(next, cfg);
+    if (norm) __setFileSearch(f, metaToSyntax(norm, cfg), norm); else __setFileSearch(f, null, null);
+    n++;
+  }
+  if (n) {
+    __bumpDraftRev(db);
+    await __contentSessionPut(env, adminId, state.base_version, db, state.base_db, { existingSession: state.session, forceActive: true });
+  }
+  return n;
+}
 
 async function __sfShowMain(env, adminId, note, pre) {
   // `pre` = state the caller already loaded ({ raw, dirty, getSeen }): saves D1 round trips on every tap.
   const { raw, dirty } = pre || await __sfLoad(env, adminId), seen = pre && pre.getSeen ? await pre.getSeen() : await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
-  const text = (note ? note + "\n\n" : "") +
-    "🔎 فلاتر البحث\n\n" +
-    "ده شكل الفلاتر في التطبيق:\n\n" + __sfPreview(cx) + "\n" +
-    (cx.hidden.length ? "\n🙈 مخفي: " + cx.hidden.map(cx.label).join("، ") + "\n" : "") +
-    "\n⬆️ ⬇️ لتغيير الترتيب  •  🙈 إخفاء  •  👁 إظهار\n➖ ➕ عدد الفلاتر في كل سطر (كل سطر ليه عدده)\nاضغط على اسم الفلتر لتغيير اسمه أو كلمات البحث عنه.\n\n" +
-    (dirty ? "⚠️ فيه تعديلات لسه ما اتحفظتش. اضغط 💾 حفظ عشان تظهر في التطبيق." : "✅ كل التعديلات محفوظة. أي تغيير هتعمله هيستنى زرار 💾 حفظ.") +
-    "\n\n(إصدار الفلاتر: " + __SF_BUILD + ")";
-  const rows = [...__sfSaveRow(dirty)];
+  const text = (note ? note + "\n\n" : "") + "🔎 فلاتر البحث\n\n" + __sfPreview(cx) +
+    (cx.hidden.length ? "\n🙈 مخفي: " + cx.hidden.map(cx.label).join("، ") : "") +
+    (dirty ? "\n\n⚠️ تعديلات لسه ما اتحفظتش" : "");
+  const rows = [];
   cx.visible.forEach((k, i) => rows.push([
     { text: __sfN(i + 1) + " " + cx.label(k), callback_data: "A|SF_ONE|" + k },
     { text: "⬆️", callback_data: "A|SF_U|" + k },
@@ -7427,16 +7455,13 @@ async function __sfShowMain(env, adminId, note, pre) {
     { text: "🙈", callback_data: "A|SF_T|" + k }
   ]));
   for (const k of cx.hidden) rows.push([{ text: "🙈 " + cx.label(k), callback_data: "A|SF_ONE|" + k }, { text: "👁 إظهار", callback_data: "A|SF_T|" + k }]);
-  if (cx.rows.length) rows.push([{ text: "الأسطر (➖ ➕ عدد الفلاتر):", callback_data: "A|NOP" }]);
   cx.rows.forEach((r, ri) => rows.push([
     { text: "➖", callback_data: "A|SF_RS|" + ri + "|-" },
     { text: "سطر " + (ri + 1) + " · " + r.length, callback_data: "A|NOP" },
     { text: "➕", callback_data: "A|SF_RS|" + ri + "|+" }
   ]));
-  rows.push([{ text: "ترتيب سريع (نفس العدد في كل سطر):", callback_data: "A|NOP" }]);
-  rows.push([1, 2, 3, 4, 5, 6].map((n) => ({ text: String(n), callback_data: "A|SF_C|" + n })));
   rows.push([{ text: "➕ فلتر جديد", callback_data: "A|SF_ADD" }, { text: "🔄 الافتراضي", callback_data: "A|SF_RESET" }]);
-  rows.push([{ text: "⬅️ رجوع", callback_data: "A|HOME" }]);
+  rows.push(__sfBottomRow(dirty, "A|HOME"));
   await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
@@ -7445,22 +7470,16 @@ async function __sfShowOne(env, adminId, key, note, pre) {
   if (!cx.all.includes(key)) { await __sfShowMain(env, adminId, "⚠️ الفلتر ده مش موجود."); return; }
   const f = cx.cfg.fields[key] || {};
   const pos = cx.visible.indexOf(key);
-  const kind = { enum: "اختيار من قائمة", number: "رقم", text: "نص" }[fieldKind(key, cx.cfg)] || "نص";
+  const kind = { enum: "قايمة", number: "رقم", text: "نص" }[fieldKind(key, cx.cfg)] || "نص";
+  const builtIn = isBuiltInField(key);
   const text = (note ? note + "\n\n" : "") +
-    "🏷 " + cx.label(key) + "\n\n" +
-    "الكود: " + key + (isBuiltInField(key) ? " (أساسي)" : " (إضافي)") + "\n" +
-    "النوع: " + kind + "\n" +
-    "الظهور: " + (pos >= 0 ? "ظاهر، رقم " + (pos + 1) : "مخفي") + "\n" +
-    "كلمات البحث: " + ((f.words || []).join("، ") || "لا يوجد") + "\n\n" +
-    "كلمات البحث هي اللي لو الطالب كتبها في خانة البحث تلاقي الفلتر ده. مثال: لو الكلمات «دكتور، dr» يبقى كتابة «dr ahmed» بتصفي على الحقل ده.\n" +
-    "في كل الأحوال بيشتغل كتابة  " + key + ":قيمة" +
-    (dirty ? "\n\n⚠️ فيه تعديلات لسه ما اتحفظتش." : "");
-  const rows = [
-    ...__sfSaveRow(dirty),
-    [{ text: "✏️ تغيير الاسم", callback_data: "A|SF_REN|" + key }, { text: "💬 كلمات البحث", callback_data: "A|SF_WRD|" + key }]
-  ];
-  if (!isBuiltInField(key) && raw.fields[key]) rows.push([{ text: "🗑 حذف الإعداد", callback_data: "A|SF_DEL|" + key }]);
-  rows.push([{ text: "⬅️ رجوع", callback_data: "A|SF" }]);
+    "🏷 " + cx.label(key) + "  (" + key + ")\n" +
+    kind + " • " + (builtIn ? "أساسي" : "إضافي") + " • " + (pos >= 0 ? "ظاهر رقم " + (pos + 1) : "مخفي") + "\n" +
+    "كلمات البحث: " + ((f.words || []).join("، ") || "لا يوجد") +
+    (dirty ? "\n\n⚠️ تعديلات لسه ما اتحفظتش" : "");
+  const rows = [[{ text: "✏️ الاسم", callback_data: "A|SF_REN|" + key }, { text: "💬 كلمات البحث", callback_data: "A|SF_WRD|" + key }]];
+  rows.push([{ text: "🗑 حذف الفلتر", callback_data: "A|SF_DEL|" + key }]);
+  rows.push(__sfBottomRow(dirty, "A|SF"));
   await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
@@ -7560,7 +7579,23 @@ async function __sfCallback(env, adminId, op, parts) {
     await __sfAskText(env, adminId, "SF_ADD", {}, "➕ فلتر جديد. ابعت:  الكود  الاسم  [text|number]\n\nأمثلة:\n• doctor الدكتور\n• year السنة number\n\nالكود حروف إنجليزي/أرقام/_ وبعدها بتوسم الملفات بـ  [قيمة].الكود");
     return true;
   }
-  if (op === "SF_DEL") { delete raw.fields[key]; return stage(); }
+  if (op === "SF_DEL") {
+    const n = await __sfCountField(env, adminId, key);
+    const bi = isBuiltInField(key);
+    await tgSend(env, adminId, "🗑 حذف الفلتر «" + key + "»؟\n" +
+      (n ? "هيتمسح من " + n + " ملف (بيروح لمسودة المحتوى، ولازم 💾 Save All Changes بعدها)." : "مفيش ملفات عليه.") +
+      (bi ? "\nده فلتر أساسي: هيفضل في قايمة 🙈 المخفي وتقدر تظهره تاني." : "\nهيتشال من الإعدادات.") +
+      "\nاسم الملف الأصلي مش بيتلمس.", { reply_markup: __sfKb([[{ text: "✅ أيوه احذف", callback_data: "A|SF_DEL2|" + key }, { text: "✖️ لأ", callback_data: "A|SF_ONE|" + key }]]) });
+    return true;
+  }
+  if (op === "SF_DEL2") {
+    const n = await __sfStripField(env, adminId, key);
+    if (isBuiltInField(key)) raw.fields[key] = { ...(raw.fields[key] || {}), filter: false };
+    else delete raw.fields[key];
+    await __sfStage(env, adminId, raw);
+    await __sfShowMain(env, adminId, "🗑 اتحذف الفلتر «" + key + "»" + (n ? " من " + n + " ملف.\nاضغط 💾 Save All Changes للمحتوى، و💾 حفظ هنا." : ".\nاضغط 💾 حفظ."), { raw, dirty: true, getSeen: async () => ({ keys: (await __sfSeen(env, adminId)).keys.filter((k) => k !== key) }) });
+    return true;
+  }
   if (op === "SF_RESET") {
     await tgSend(env, adminId, "🔄 ترجّع الترتيب والأسماء والفلاتر الإضافية والأسطر للوضع الافتراضي؟\n(هيتحط في التعديلات، ولازم تضغط 💾 حفظ بعدها). بيانات الملفات مبتتغيّرش.", { reply_markup: __sfKb([
       [{ text: "✅ أيوه", callback_data: "A|SF_RESET2" }, { text: "✖️ لأ", callback_data: "A|SF" }]
