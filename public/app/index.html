@@ -656,8 +656,16 @@ function legacySearch(raw){
 
 function resultCard(e, title){
   const f = e.f, on = inCart(e.id, f.k);
-  const orig = f.nm || (f.c ? f.c.split("\n")[0] : "");
-  const sub = [orig ? orig.slice(0, 80) : "", [fmtSize(f.s)].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
+  // Search cards keep the metadata-driven title, but their secondary line must still
+  // use the original file details. Resolve the full node entry as a fallback so
+  // filename/caption and size remain visible when the indexed entry is slimmed.
+  const source = ((node(e.id) || {}).f || []).find((x) => String(x.k) === String(f.k)) || f;
+  const names = [source.c, source.nm, f.c, f.nm]
+    .map((v) => String(v || "").split("\n")[0].trim())
+    .filter((v) => v && v !== String(title || "").trim());
+  const fileName = names[0] || "";
+  const size = fmtSize(source.s || f.s);
+  const sub = [fileName ? fileName.slice(0, 100) : "", size].filter(Boolean).join(" · ");
   return '<button class="file" data-tg="' + esc(e.id) + "|" + esc(f.k) + '" aria-pressed="' + on + '">' +
     '<span class="chk" aria-hidden="true">✓</span><span class="ficon" aria-hidden="true">' + icon(f.t) + "</span>" +
     '<span class="fbody" dir="auto"><span class="ftitle">' + esc(title) + "</span>" +
