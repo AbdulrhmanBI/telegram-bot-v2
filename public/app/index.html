@@ -151,7 +151,10 @@ h2{margin:6px 0 2px;font-size:20px}
 .cartbar.show{display:block}
 .cartbtn{width:100%;max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--accent);color:var(--accent-text);border:0;border-radius:14px;padding:14px 16px;font-weight:700;box-shadow:var(--shadow)}
 .pill{background:rgba(255,255,255,.22);border-radius:999px;padding:2px 10px;font-size:13px}
-:root[data-theme="dark"] .pill{background:rgba(0,0,0,.18)}
+:root[data-theme="dark"] .pill{background:transparent;border:1px solid rgba(11,18,32,.28)}
+/* Keep primary action surfaces on the selected Cool Sapphire accent in dark mode. */
+:root[data-theme="dark"] .cartbtn,
+:root[data-theme="dark"] .btn.primary{background-color:#5B9BFF;border-color:#5B9BFF}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:none}
 .scrim.show{display:block}
 .sheet{position:fixed;inset-inline:0;bottom:0;z-index:50;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--shadow);max-height:86vh;display:none;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px)}
