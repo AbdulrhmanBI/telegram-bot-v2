@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=yes">
+<meta name="theme-color" content="#071a3a">
+<title>Seniors — The End</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{color-scheme:dark;--blue:#1769e0;--deep:#06132b;--white:#f5f9ff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--deep);color:var(--white);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+body{isolation:isolate;background:radial-gradient(ellipse at 50% 45%,#123e83 0%,#091f49 40%,#040b1a 100%)}
+#scene{position:fixed;inset:0;overflow:hidden;perspective:1000px}
+.glow{position:absolute;inset:-20%;pointer-events:none;background:radial-gradient(ellipse at 50% 50%,rgba(35,112,255,.24),transparent 58%);z-index:2}
+.columns{position:absolute;inset:-8vh 0;display:flex;justify-content:center;overflow:hidden;opacity:.88;pointer-events:none}
+.column{display:flex;flex-direction:column;align-items:center;gap:18px;width:min(78vw,390px);min-width:0;will-change:transform;transform:translateY(0)}
+.tile{position:relative;flex:none;width:100%;overflow:hidden;border-radius:clamp(8px,1.5vw,18px);aspect-ratio:3/4;background:linear-gradient(145deg,rgba(42,120,240,.32),rgba(3,15,38,.92));border:1px solid rgba(136,184,255,.18);box-shadow:0 10px 34px rgba(0,0,0,.28)}
+.tile img{display:block;width:100%;height:100%;object-fit:cover;filter:grayscale(1) sepia(.22) hue-rotate(175deg) saturate(1.6) contrast(1.02);opacity:.74;transform:scale(1.015)}
+.tile:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(18,90,205,.14),rgba(4,20,51,.55));mix-blend-mode:color}
+/* Dark blue veil keeps every photo in one consistent visual palette. */
+.bluewash{position:absolute;inset:0;z-index:3;pointer-events:none;background:linear-gradient(120deg,rgba(5,23,58,.2),rgba(12,78,174,.28) 50%,rgba(2,11,29,.52));backdrop-filter:saturate(.72)}
+.center{position:absolute;z-index:5;inset:0;display:grid;place-items:center;text-align:center;padding:24px;pointer-events:none}
+.center-inner{position:relative;padding:clamp(20px,5vw,48px) clamp(28px,8vw,76px);border:1px solid rgba(196,221,255,.4);border-radius:8px;background:rgba(4,18,45,.36);backdrop-filter:blur(9px);box-shadow:0 0 80px rgba(20,105,255,.18);animation:arrive 1.2s cubic-bezier(.2,.8,.2,1) both}
+.center-inner:before,.center-inner:after{content:"";position:absolute;width:24px;height:24px;border-color:rgba(155,199,255,.85);border-style:solid}
+.center-inner:before{top:-5px;left:-5px;border-width:1px 0 0 1px}.center-inner:after{right:-5px;bottom:-5px;border-width:0 1px 1px 0}
+h1{margin:0;font-size:clamp(34px,8vw,82px);font-weight:800;letter-spacing:.16em;line-height:1.05;text-indent:.16em;color:#fff;text-shadow:0 0 18px rgba(88,160,255,.45),0 5px 30px rgba(0,0,0,.5)}
+.sub{margin-top:16px;font-size:clamp(9px,1.8vw,13px);letter-spacing:.32em;text-indent:.32em;color:rgba(221,237,255,.78);text-transform:uppercase}
+.corner{position:absolute;z-index:6;left:18px;right:18px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;justify-content:space-between;gap:12px;font-size:10px;letter-spacing:.2em;color:rgba(207,226,255,.54);text-transform:uppercase;pointer-events:none}
+.empty{position:absolute;z-index:8;left:18px;right:18px;bottom:calc(46px + env(safe-area-inset-bottom,0px));margin:auto;max-width:420px;text-align:center;font-size:12px;line-height:1.6;color:rgba(230,240,255,.72);background:rgba(3,14,35,.72);border:1px solid rgba(142,188,255,.2);border-radius:12px;padding:10px 14px;backdrop-filter:blur(8px);display:none}
+@keyframes scroll{from{transform:translateY(0)}to{transform:translateY(-50%)}}
+@keyframes scrollReverse{from{transform:translateY(-50%)}to{transform:translateY(0)}}
+@keyframes arrive{from{opacity:0;transform:translateY(12px) scale(.97);filter:blur(5px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+@media(max-width:560px){.columns{inset:-10vh 0}.column{width:min(78vw,390px);gap:14px}.tile{border-radius:9px}.center-inner{padding:25px 23px}.sub{margin-top:12px}.corner{font-size:8px;letter-spacing:.13em}}
+@media(prefers-reduced-motion:reduce){.column,.center-inner{animation:none}.column{transform:none}}
+
+#musicToggle{position:fixed;right:16px;top:calc(env(safe-area-inset-top,0px) + 16px);z-index:20;
+border:1px solid rgba(130,190,255,.5);border-radius:999px;background:rgba(3,18,44,.62);
+color:#f5f9ff;padding:10px 13px;font:600 13px system-ui;backdrop-filter:blur(12px);
+box-shadow:0 0 22px rgba(35,112,255,.18)}
+#musicToggle:active{transform:scale(.97)}
+</style>
+</head>
+<body>
+<div id="scene" aria-label="A blue-toned scrolling collage of senior class photos">
+  <div class="columns" id="columns" aria-hidden="true"></div>
+  <div class="bluewash"></div><div class="glow"></div>
+  <div class="center"><div class="center-inner"><h1>THE END</h1><div class="sub">Class memories · Forever</div></div></div>
+  <div class="corner"><span>SENIORS</span><span>ONE LAST FRAME</span></div>
+  <div class="empty" id="empty">Add your batch photos to <b>public/app/seniors/photos/</b> and list their paths in <b>public/app/seniors/photos.json</b>.</div>
+</div>
+<script>
+(() => {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  try { if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#06132b'); tg.setBackgroundColor('#06132b'); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } } catch (_) {}
+  const root = document.getElementById('columns');
+  const shuffle = (arr) => { const a = arr.slice(); for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
+  const makeTile = (src) => {
+    const tile = document.createElement('div'); tile.className='tile';
+    const img = document.createElement('img'); img.loading='eager'; img.alt=''; img.src=src;
+    img.onerror=()=>tile.remove(); tile.appendChild(img); return tile;
+  };
+  function build(urls) {
+    root.innerHTML = '';
+    if (!urls.length) { document.getElementById('empty').style.display='block'; return; }
+    document.getElementById('empty').style.display='none';
+    const col=document.createElement('div'); col.className='column'; root.appendChild(col);
+    let deck=[], lastSrc=null, busy=false;
+    function refill() {
+      let next=shuffle(urls);
+      // Avoid repeating the same poster at the boundary between shuffled rounds.
+      if (next.length>1 && next[0]===lastSrc) { const swap=next.findIndex(x=>x!==lastSrc); if(swap>0) [next[0],next[swap]]=[next[swap],next[0]]; }
+      deck=next;
+    }
+    function nextSrc() { if(!deck.length) refill(); const src=deck.shift(); lastSrc=src; return src; }
+    // Seed enough cards to fill the viewport, then continuously recycle the top card.
+    for(let i=0;i<5;i++) col.appendChild(makeTile(nextSrc()));
+    let lastTime=0, offset=0;
+    function animate(now) {
+      if(!lastTime) lastTime=now;
+      const dt=Math.min((now-lastTime)/1000,0.05); lastTime=now;
+      offset += 54*dt;
+      const first=col.firstElementChild;
+      if(first) {
+        const gap=parseFloat(getComputedStyle(col).gap)||18;
+        const height=first.getBoundingClientRect().height+gap;
+        if(offset>=height) { offset-=height; col.appendChild(makeTile(nextSrc())); first.remove(); }
+      }
+      col.style.transform=`translateY(${-offset}px)`;
+      requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+  }
+  fetch('./seniors/photos.json', {cache:'no-cache'})
+    .then(r => { if (!r.ok) throw new Error('manifest missing'); return r.json(); })
+    .then(data => build(Array.isArray(data.photos) ? [...new Set(data.photos.filter(x => typeof x === 'string' && x.trim()).map(x => new URL(x, location.href).href))] : []))
+    .catch(() => build([]));
+})();
+</script>
+</body>
+</html>
