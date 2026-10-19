@@ -7344,6 +7344,7 @@ const __sfN = (i) => __SF_NUM[i] || String(i) + ".";
 // Drafts live in their OWN table (one row per admin). They must not share `search_config`: on a database where that
 // table was created with CHECK(id=1) (a single live row) any other id is rejected.
 const __SF_TABLE_SQL = "CREATE TABLE IF NOT EXISTS search_config_draft (admin_id INTEGER PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER)";
+const __SF_BUILD = "3-draft-table";
 const __sfBlank = () => ({ v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, layout: [], fields: {} });
 
 async function __sfDraftRow(env, adminId) {
@@ -7416,7 +7417,8 @@ async function __sfShowMain(env, adminId, note, pre) {
     "ده شكل الفلاتر في التطبيق:\n\n" + __sfPreview(cx) + "\n" +
     (cx.hidden.length ? "\n🙈 مخفي: " + cx.hidden.map(cx.label).join("، ") + "\n" : "") +
     "\n⬆️ ⬇️ لتغيير الترتيب  •  🙈 إخفاء  •  👁 إظهار\n➖ ➕ عدد الفلاتر في كل سطر (كل سطر ليه عدده)\nاضغط على اسم الفلتر لتغيير اسمه أو كلمات البحث عنه.\n\n" +
-    (dirty ? "⚠️ فيه تعديلات لسه ما اتحفظتش. اضغط 💾 حفظ عشان تظهر في التطبيق." : "✅ كل التعديلات محفوظة. أي تغيير هتعمله هيستنى زرار 💾 حفظ.");
+    (dirty ? "⚠️ فيه تعديلات لسه ما اتحفظتش. اضغط 💾 حفظ عشان تظهر في التطبيق." : "✅ كل التعديلات محفوظة. أي تغيير هتعمله هيستنى زرار 💾 حفظ.") +
+    "\n\n(إصدار الفلاتر: " + __SF_BUILD + ")";
   const rows = [...__sfSaveRow(dirty)];
   cx.visible.forEach((k, i) => rows.push([
     { text: __sfN(i + 1) + " " + cx.label(k), callback_data: "A|SF_ONE|" + k },
