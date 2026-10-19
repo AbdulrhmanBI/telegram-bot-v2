@@ -27,10 +27,11 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-/* Header layout: a real page-tab rail, theme toggle beside it, search below. */
+/* Header layout: minimal page tabs + theme toggle, with search and filters beneath. */
 .top{position:sticky;top:0;z-index:20;background:var(--bg);padding:10px 12px 8px;padding-top:calc(10px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
 .primary-nav{display:flex;align-items:stretch;gap:8px;min-width:0;border-bottom:1px solid var(--line)}
 .bar{display:flex;gap:8px;align-items:center;margin-top:9px}
+.bar.hidden,.crumbs.hidden,.fpanel.hidden{display:none !important}
 .search{font-size:16px;flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none}
 .search:focus{border-color:var(--accent)}
 .iconbtn{flex:none;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-size:16px}
@@ -39,15 +40,26 @@ button{cursor:pointer}
 .crumb{background:none;border:0;padding:2px 4px;color:var(--accent);border-radius:6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb.cur{color:var(--muted);cursor:default}
 .sep{opacity:.5}
-/* Top-level sections use connected, browser-style tabs rather than standalone pills. */
-.tabs{display:flex;align-items:stretch;gap:4px;flex:1;min-width:0;margin:0;padding:0;overflow-x:auto;scrollbar-width:none}
+/* Minimal underline navigation: the active page is identified by color + a slim underline. */
+.tabs{display:flex;align-items:stretch;gap:16px;flex:1;min-width:0;margin:0;padding:0;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
-.tab{position:relative;flex:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:41px;margin-top:2px;padding:8px 15px 9px;border:1px solid transparent;border-bottom-color:transparent;border-radius:10px 10px 0 0;background:transparent;color:var(--muted);font-size:13.5px;font-weight:650;white-space:nowrap;transition:color .15s,background .15s,border-color .15s}
-.tab[aria-selected="true"]{border-color:var(--accent) var(--accent) var(--bg);background:var(--bg);color:var(--accent);box-shadow:0 -1px 0 var(--accent)}
-.tab-icon{width:17px;height:17px;display:block;flex:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}
+.tab{position:relative;flex:none;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:42px;margin:0;padding:9px 3px 10px;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:13.5px;font-weight:600;white-space:nowrap;transition:color .15s}
+.tab[aria-selected="true"]{background:transparent;color:var(--accent);border:0;box-shadow:none}
+.tab[aria-selected="true"]::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:2px 2px 0 0;background:var(--accent)}
+:root[data-theme="dark"] .tab[aria-selected="true"]{color:#5B9BFF}
+:root[data-theme="dark"] .tab[aria-selected="true"]::after{background:#5B9BFF}
+.tab-icon{width:16px;height:16px;display:block;flex:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}
 .tab:active{opacity:.82}
 
 main{padding:12px;max-width:900px;margin:0 auto}
+.demo-page{max-width:560px;margin:24px auto 0;padding:24px 20px;background:var(--card);border:1px solid var(--line);border-radius:18px;text-align:center}
+.demo-icon{width:54px;height:54px;margin:0 auto 14px;display:grid;place-items:center;border-radius:16px;background:var(--accent-soft);color:var(--accent)}
+.demo-icon svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.demo-kicker{margin:0 0 4px;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.12em}
+.demo-page h2{margin:0 0 8px;font-size:21px}
+.demo-page p:not(.demo-kicker){margin:0;color:var(--muted);font-size:14px;line-height:1.65}
+.demo-label{display:inline-flex;align-items:center;gap:6px;margin-top:18px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px}
+.demo-label::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok)}
 h2{margin:6px 0 2px;font-size:20px}
 .meta{color:var(--muted);font-size:12.5px;margin-bottom:12px}
 .sec{margin-top:18px}
@@ -172,10 +184,11 @@ h2{margin:6px 0 2px;font-size:20px}
   <div class="primary-nav">
     <nav id="tabs" class="tabs" role="tablist" aria-label="Main sections">
       <button id="libraryTab" class="tab" type="button" role="tab" aria-selected="true" aria-controls="app" data-tab="library"><svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16M8 7h8M8 11h8"/></svg><span>Library</span></button>
+      <button id="exploreTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="app" data-tab="explore"><svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.7 8.3-2.4 5-5 2.4 2.4-5z"/></svg><span>Explore</span></button>
     </nav>
     <button id="themeBtn" class="iconbtn" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
-  <div class="bar">
+  <div id="searchBar" class="bar">
     <input id="q" class="search" type="search" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="search" aria-label="search">
     <button id="fBtn" class="iconbtn" type="button" aria-label="Filters" title="Filters" hidden>⚙️</button>
   </div>
@@ -261,7 +274,7 @@ const S = {
   lang: "en",
   theme: initialTheme,
   data: null, version: "", max: MAX_TOTAL_ITEMS, parent: {},
-  cart: LS.get("lib:cart", []),
+  cart: LS.get("lib:cart", []), activeTab: "library",
   cur: null, trail: [], query: "", sending: false, sheet: null, banner: null,
   sindex: [], sctx: null,         // local structured-search index (built once per content load)
   filters: {}, fOpen: false, fmodel: [], qp: null, pop: null, fsig: ""
@@ -433,16 +446,17 @@ function open(id, push = true){
   renderAll(); window.scrollTo(0, 0);
 }
 function selectTab(tab){
-  if (tab !== "library" || !S.data) return;
-  // Library is the only available section for now. Selecting it always returns
-  // to the Library root and clears any active search/filter state.
-  S.cur = String(S.data.root);
-  S.trail = [];
+  if (tab !== "library" && tab !== "explore") return;
+  S.activeTab = tab;
   S.query = "";
   $("q").value = "";
-  S.filters = {};
   S.fOpen = false;
   closePop();
+  // For this navigation preview, both sections start from a clean Library state.
+  // Explore intentionally stays a lightweight placeholder until a real section is added.
+  if (S.data) S.cur = String(S.data.root);
+  S.trail = [];
+  S.filters = {};
   renderAll();
   window.scrollTo(0, 0);
   haptic();
@@ -764,9 +778,43 @@ function normalizeFolderGrid(){
   if (items.length % 2 === 1 && items.length) items[items.length - 1].style.gridColumn = '1 / -1';
 }
 
+function syncTabLayout(){
+  const isLibrary = S.activeTab === "library";
+  document.querySelectorAll("[data-tab]").forEach((el) => {
+    el.setAttribute("aria-selected", String(el.dataset.tab === S.activeTab));
+  });
+  $("searchBar").classList.toggle("hidden", !isLibrary);
+  $("crumbs").classList.toggle("hidden", !isLibrary);
+  $("fpanel").classList.toggle("hidden", !isLibrary);
+  if (!isLibrary) {
+    $("fpanel").classList.remove("show");
+    closePop();
+  }
+}
+
+function renderExplorePage(){
+  return '<section class="demo-page" aria-labelledby="exploreHeading">' +
+    '<div class="demo-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.7 8.3-2.4 5-5 2.4 2.4-5z"/></svg></div>' +
+    '<p class="demo-kicker">TAB PREVIEW</p>' +
+    '<h2 id="exploreHeading">Explore</h2>' +
+    '<p>This is a demo page to preview the new tab navigation. More sections can be added here later.</p>' +
+    '<span class="demo-label">Placeholder page</span>' +
+    '</section>';
+}
+
 function renderAll(keepScroll){
-  if (!S.data) return;
   const y = window.scrollY;
+  syncTabLayout();
+  if (S.activeTab === "explore") {
+    $("crumbs").innerHTML = "";
+    $("app").innerHTML = renderExplorePage();
+    renderCartBar();
+    if (S.sheet) renderSheet();
+    syncBackButton();
+    if (keepScroll) window.scrollTo(0, y);
+    return;
+  }
+  if (!S.data) return;
   renderCrumbs();
   prepSearch();
   renderFilters();
