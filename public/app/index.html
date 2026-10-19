@@ -37,6 +37,12 @@ button{cursor:pointer}
 .crumb{background:none;border:0;padding:2px 4px;color:var(--accent);border-radius:6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb.cur{color:var(--muted);cursor:default}
 .sep{opacity:.5}
+/* Top-level mini-app sections. Keep the tab rail ready for future sections. */
+.tabs{display:flex;align-items:center;gap:6px;margin-top:9px;padding:0 0 2px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:7px 13px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap}
+.tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.tab:active{transform:scale(.98)}
 
 main{padding:12px;max-width:900px;margin:0 auto}
 h2{margin:6px 0 2px;font-size:20px}
@@ -165,6 +171,9 @@ h2{margin:6px 0 2px;font-size:20px}
     <button id="fBtn" class="iconbtn" type="button" aria-label="Filters" title="Filters" hidden>⚙️</button>
     <button id="themeBtn" class="iconbtn" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Main sections">
+    <button id="libraryTab" class="tab" type="button" role="tab" aria-selected="true" data-tab="library"><span aria-hidden="true">📚</span><span>Library</span></button>
+  </nav>
   <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
 </header>
 
@@ -418,6 +427,21 @@ function open(id, push = true){
   S.cur = id; S.query = ""; $("q").value = "";
   renderAll(); window.scrollTo(0, 0);
 }
+function selectTab(tab){
+  if (tab !== "library" || !S.data) return;
+  // Library is the only available section for now. Selecting it always returns
+  // to the Library root and clears any active search/filter state.
+  S.cur = String(S.data.root);
+  S.trail = [];
+  S.query = "";
+  $("q").value = "";
+  S.filters = {};
+  S.fOpen = false;
+  closePop();
+  renderAll();
+  window.scrollTo(0, 0);
+  haptic();
+}
 function back(){
   if (S.query) { S.query = ""; $("q").value = ""; renderAll(); return true; }
   if (S.sheet) { closeSheet(); return true; }
@@ -485,6 +509,9 @@ function selectAllHere(){
 /* ───────────── rendering ───────────── */
 function renderCrumbs(){
   if (!S.data) return;
+  // The active Library tab already identifies the root screen; don't add a lone
+  // "Home" breadcrumb there. Keep the full breadcrumb trail inside folders.
+  if (S.cur === String(S.data.root)) { $("crumbs").innerHTML = ""; return; }
   const ids = chain(S.cur);
   $("crumbs").innerHTML = ids.map((id, i) => {
     const name = i === 0 ? T("root") : (node(id) || {}).n || id;
@@ -510,8 +537,11 @@ function renderNode(){
   const childCount = rows.reduce((a, r) => a + r.length, 0);
   let h = "";
   if (S.banner) { h += '<div class="banner' + (S.banner.err ? " err" : "") + '">' + esc(S.banner.t) + "</div>"; S.banner = null; }
-  h += '<h2 dir="auto">' + esc(S.cur === String(S.data.root) ? T("title") : nd.n) + "</h2>";
-  h += '<div class="meta">' + [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ") + "</div>";
+  // The top-level section is already named in the tab rail, so avoid repeating
+  // "Library" as a large heading inside the page body.
+  if (S.cur !== String(S.data.root)) h += '<h2 dir="auto">' + esc(nd.n) + "</h2>";
+  const overview = [childCount ? childCount + " " + T("foldersN") : "", files.length ? files.length + " " + T("filesN") : ""].filter(Boolean).join(" · ");
+  if (overview) h += '<div class="meta">' + overview + "</div>";
 
   if (rows.length) {
     // Flatten all child rows for Mini App display only, preserving exact order.
@@ -913,6 +943,8 @@ $("webviewFrame").addEventListener("error",()=>$("webviewNote").classList.add("s
 /* ───────────── events ───────────── */
 document.addEventListener("click", (e) => {
   const t = e.target;
+  const tab = t.closest("[data-tab]");
+  if (tab) { selectTab(tab.dataset.tab); return; }
   if (S.pop && !t.closest("#fpop") && !t.closest("[data-fd]")) closePop();
   const ext = t.closest("[data-ext]");
   if (ext) { e.preventDefault(); const href = ext.getAttribute("href") || ""; if (/^https?:/i.test(href)) openWebView(href); else { openExternalRobust(href); } return; }
