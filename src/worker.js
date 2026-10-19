@@ -6856,7 +6856,15 @@ async function handleAdminCallback(env, q, bag) {
 
     // --- Search fields (display & order) ---
     if (op === "SF" || op.startsWith("SF_")) {
-      if (await __sfCallback(env, adminId, op, parts)) return true;
+      try {
+        if (await __sfCallback(env, adminId, op, parts)) return true;
+      } catch (e) {
+        // Show the REAL reason to the admin (and log it) instead of the generic "admin action failed".
+        const em = e && e.message ? String(e.message) : String(e);
+        console.error("SF_CALLBACK_ERROR:", JSON.stringify({ op, key: parts[2] || null, error: em, stack: e && e.stack ? String(e.stack).slice(0, 1500) : undefined }));
+        await tgSend(env, chat_id, "⚠️ حصلت مشكلة في فلاتر البحث (" + op + ").\nالسبب: " + em.slice(0, 200) + "\n\nتعديلاتك محفوظة في المسودة. جرّب تاني، ولو اتكررت ابعت لي الرسالة دي.", { reply_markup: __sfKb([[{ text: "⬅️ رجوع لفلاتر البحث", callback_data: "A|SF" }]]) });
+        return true;
+      }
     }
 
     // --- Welcome Management ---
@@ -7352,16 +7360,18 @@ async function __sfLoad(env, adminId) {
   return { raw, dirty: false };
 }
 const __sfRaw = async (env, adminId) => (await __sfLoad(env, adminId)).raw;
+let __SF_TABLE_READY = false;
 async function __sfStage(env, adminId, raw) {
-  await env.SQL.prepare(__SF_TABLE_SQL).run();
+  if (!__SF_TABLE_READY) { await env.SQL.prepare(__SF_TABLE_SQL).run(); __SF_TABLE_READY = true; }
   await env.SQL.prepare("INSERT INTO search_config(id,json,rev,updated_at) VALUES(?1,?2,0,?3) ON CONFLICT(id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at")
     .bind(__sfDraftId(adminId), JSON.stringify(sanitizeOverrides(raw, defaultConfig()).ov), Math.floor(Date.now() / 1000)).run();
 }
 async function __sfDrop(env, adminId) {
   try { await env.SQL.prepare("DELETE FROM search_config WHERE id=?1").bind(__sfDraftId(adminId)).run(); } catch (_) {}
 }
-async function __sfCommit(env, adminId) {
-  const { raw, dirty } = await __sfLoad(env, adminId);
+async function __sfCommit(env, adminId, knownRaw) {
+  let raw = knownRaw, dirty = !!knownRaw;
+  if (!raw) ({ raw, dirty } = await __sfLoad(env, adminId));
   if (!dirty) return false;
   await __searchCfgSave(env, raw);
   await __sfDrop(env, adminId);
@@ -7398,8 +7408,9 @@ function __sfPreview(cx) {
 }
 const __sfSaveRow = (dirty) => (dirty ? [[{ text: "💾 حفظ", callback_data: "A|SF_SAVE" }, { text: "↩️ تجاهل التعديلات", callback_data: "A|SF_DISCARD" }]] : []);
 
-async function __sfShowMain(env, adminId, note) {
-  const { raw, dirty } = await __sfLoad(env, adminId), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+async function __sfShowMain(env, adminId, note, pre) {
+  // `pre` = state the caller already loaded ({ raw, dirty, getSeen }): saves D1 round trips on every tap.
+  const { raw, dirty } = pre || await __sfLoad(env, adminId), seen = pre && pre.getSeen ? await pre.getSeen() : await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
   const text = (note ? note + "\n\n" : "") +
     "🔎 فلاتر البحث\n\n" +
     "ده شكل الفلاتر في التطبيق:\n\n" + __sfPreview(cx) + "\n" +
@@ -7427,8 +7438,8 @@ async function __sfShowMain(env, adminId, note) {
   await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
-async function __sfShowOne(env, adminId, key, note) {
-  const { raw, dirty } = await __sfLoad(env, adminId), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+async function __sfShowOne(env, adminId, key, note, pre) {
+  const { raw, dirty } = pre || await __sfLoad(env, adminId), seen = pre && pre.getSeen ? await pre.getSeen() : await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
   if (!cx.all.includes(key)) { await __sfShowMain(env, adminId, "⚠️ الفلتر ده مش موجود."); return; }
   const f = cx.cfg.fields[key] || {};
   const pos = cx.visible.indexOf(key);
@@ -7483,20 +7494,22 @@ function __sfNewProblems(oldRaw, newRaw) {
 
 async function __sfCallback(env, adminId, op, parts) {
   const key = String(parts[2] || "").toLowerCase();
-  const { raw } = await __sfLoad(env, adminId);
-  const stage = async () => { await __sfStage(env, adminId, raw); await __sfShowMain(env, adminId); return true; };
+  const loaded = await __sfLoad(env, adminId), raw = loaded.raw;
+  let seenP = null;
+  const getSeen = () => (seenP = seenP || __sfSeen(env, adminId));                     // loaded at most once per tap
+  const stage = async () => { await __sfStage(env, adminId, raw); await __sfShowMain(env, adminId, "", { raw, dirty: true, getSeen }); return true; };
 
-  if (op === "SF") { await __sfShowMain(env, adminId); return true; }
-  if (op === "SF_ONE") { await __sfShowOne(env, adminId, key); return true; }
+  if (op === "SF") { await __sfShowMain(env, adminId, "", { ...loaded, getSeen }); return true; }
+  if (op === "SF_ONE") { await __sfShowOne(env, adminId, key, "", { ...loaded, getSeen }); return true; }
   if (op === "SF_SAVE") {
-    const ok = await __sfCommit(env, adminId);
-    await __sfShowMain(env, adminId, ok ? "✅ اتحفظ. التغيير هيظهر في التطبيق خلال نص دقيقة تقريباً." : "ℹ️ مفيش تعديلات محتاجة حفظ.");
+    const ok = loaded.dirty ? await __sfCommit(env, adminId, loaded.raw) : false;
+    await __sfShowMain(env, adminId, ok ? "✅ اتحفظ. التغيير هيظهر في التطبيق خلال نص دقيقة تقريباً." : "ℹ️ مفيش تعديلات محتاجة حفظ.", { raw: loaded.raw, dirty: false, getSeen });
     return true;
   }
   if (op === "SF_DISCARD") { await __sfDrop(env, adminId); await __sfShowMain(env, adminId, "↩️ اتلغت التعديلات اللي ما اتحفظتش."); return true; }
 
   if (op === "SF_U" || op === "SF_D") {
-    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const seen = await getSeen(), cx = __sfCtx(raw, seen.keys);
     const order = cx.visible.slice();
     const i = order.indexOf(key), j = op === "SF_U" ? i - 1 : i + 1;
     if (i >= 0 && j >= 0 && j < order.length) {
@@ -7504,10 +7517,10 @@ async function __sfCallback(env, adminId, op, parts) {
       order.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
       return stage();
     }
-    await __sfShowMain(env, adminId); return true;
+    await __sfShowMain(env, adminId, "", { raw, dirty: loaded.dirty, getSeen }); return true;
   }
   if (op === "SF_T") {
-    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const seen = await getSeen(), cx = __sfCtx(raw, seen.keys);
     const cur = { ...(raw.fields[key] || {}) };
     if (cx.hidden.includes(key)) {                           // show: put it last
       delete cur.filter;
@@ -7518,7 +7531,7 @@ async function __sfCallback(env, adminId, op, parts) {
     return stage();
   }
   if (op === "SF_RS") {                                      // ➖ / ➕ : how many filters this row holds
-    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const seen = await getSeen(), cx = __sfCtx(raw, seen.keys);
     const sizes = cx.rows.map((r) => r.length);
     const i = parseInt(parts[2] || "-1", 10), plus = parts[3] === "+";
     if (i >= 0 && i < sizes.length) {
