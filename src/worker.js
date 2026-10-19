@@ -40,7 +40,7 @@
 import { handleMiniApi } from "./miniapp-api.js";
 import {
   parseAdminSearchInput, normalizeSearchMeta, serializeSearchMeta, describeMeta, shortMeta, codesHelpText,
-  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, filterColumns, filterRows, formatValue, formatNumbers, DEFAULT_FILTER_COLS, MAX_FILTER_COLS, isDefaultOverrides, inferFromPath, enumChoices, metaToSyntax
+  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, filterColumns, filterRows, formatValue, formatNumbers, DEFAULT_FILTER_COLS, MAX_FILTER_COLS, isDefaultOverrides, inferFromPath, legacyTypeFromPath, enumChoices, metaToSyntax
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -7422,46 +7422,75 @@ async function __sfCountField(env, adminId, key) {
 }
 
 // ---- bulk auto-tag: give EVERY file that has no search data the values its folders already say (registry-driven, never guessed)
+//      + fix types that the OLD rule got wrong (a file in "Lectures › Lec 1 › Assignment" was tagged as a lecture).
 function __sfAutoPlan(db, cfg) {
-  const plan = [], bySubject = {};
+  const plan = [], fix = [], bySubject = {}, trans = {};
   let total = 0, untagged = 0;
   for (const node of Object.values(db.nodes || {})) {
     const files = node.files || [];
     total += files.length;
-    const todo = files.filter((f) => f && !f.search_meta);
-    if (!todo.length) continue;
-    untagged += todo.length;
-    const meta = inferFromPath(__wzNames(db, node.id), cfg);
+    if (!files.length) continue;
+    const names = __wzNames(db, node.id);
+    const meta = inferFromPath(names, cfg);
     const norm = Object.keys(meta).length ? normalizeSearchMeta(meta, cfg) : null;
-    if (!norm) continue;
-    for (const f of todo) { plan.push({ f, norm }); const k = norm.s ? String(norm.s) : "—"; bySubject[k] = (bySubject[k] || 0) + 1; }
+    const legacyT = legacyTypeFromPath(names, cfg);
+    for (const f of files) {
+      if (!f) continue;
+      if (!f.search_meta) {
+        untagged++;
+        if (!norm) continue;
+        plan.push({ f, norm }); const k = norm.s ? String(norm.s) : "—"; bySubject[k] = (bySubject[k] || 0) + 1;
+        continue;
+      }
+      // tagged: correct ONLY a type that the old rule produced (so a type chosen by hand is never overwritten)
+      const to = meta.t, from = f.search_meta.t;
+      if (to && from !== to && (from == null || from === legacyT)) {
+        fix.push({ f, to }); const k = (from || "—") + " ← " + to; trans[k] = (trans[k] || 0) + 1;
+      }
+    }
   }
-  return { total, untagged, plan, bySubject };
+  return { total, untagged, plan, fix, bySubject, trans };
 }
 async function __sfAutoShow(env, adminId) {
   await __searchCfgLoad(env);
   const st = await __contentGetWorkingDraft(env, adminId, { fresh: false });
-  const r = __sfAutoPlan(st.db, SEARCH_CFG_STATE.cfg);
-  if (!r.untagged) { await tgSend(env, adminId, "✅ كل الملفات (" + r.total + ") عليها بيانات بحث.", { reply_markup: __sfKb([[{ text: "⬅️ رجوع", callback_data: "A|SF" }]]) }); return; }
-  const subj = Object.entries(r.bySubject).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => k + ": " + n).join("  •  ");
-  const rest = r.untagged - r.plan.length;
-  await tgSend(env, adminId, "🪄 وسم تلقائي\n\n" + r.untagged + " ملف من " + r.total + " من غير بيانات بحث.\n" +
-    (r.plan.length ? "هوسم " + r.plan.length + " منهم من أسماء الفولدرات (المستوى، الترم، المادة، النوع، رقم المحاضرة لو في الاسم).\n" + subj : "مفيش فولدر واضح كفاية أوسم منه.") +
-    (rest > 0 ? "\n\n" + rest + " ملف فولدره مش واضح، هيفضلوا من غير وسم (وسمهم من 🗂 Manage content)." : "") +
-    "\n\nالملفات الموسومة بالفعل مبتتلمسش. الوسم بيروح لمسودة المحتوى ولازم 💾 Save All Changes.",
-  { reply_markup: __sfKb([r.plan.length ? [{ text: "✅ وسّم " + r.plan.length + " ملف", callback_data: "A|SF_AUTO2" }, { text: "✖️ لأ", callback_data: "A|SF" }] : [{ text: "⬅️ رجوع", callback_data: "A|SF" }]]) });
+  const cfg = SEARCH_CFG_STATE.cfg;
+  const r = __sfAutoPlan(st.db, cfg);
+  const lbl = (c) => (c === "—" ? "—" : formatValue("t", c, "value", cfg));
+  const parts = [];
+  if (r.untagged) {
+    const rest = r.untagged - r.plan.length;
+    parts.push("📌 " + r.untagged + " ملف من غير بيانات بحث" + (r.plan.length ? ": هوسم " + r.plan.length + " من الفولدرات" : "") + (rest > 0 ? " (" + rest + " فولدرهم مش واضح، هيفضلوا من غير وسم)" : "") + ".");
+  }
+  if (r.fix.length) {
+    const t = Object.entries(r.trans).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => { const [fr, to] = k.split(" ← "); return n + "  " + lbl(fr) + " ← " + lbl(to); }).join("\n");
+    parts.push("🔧 " + r.fix.length + " ملف نوعه غالباً غلط (الفولدر جواه نوع تاني):\n" + t + "\nاللي حطيت نوعه بإيدك مختلف عن الفولدر مش هيتغيّر.");
+  }
+  const rows = [];
+  if (r.plan.length) rows.push([{ text: "✅ وسّم " + r.plan.length + " ملف", callback_data: "A|SF_AUTO2" }]);
+  if (r.fix.length) rows.push([{ text: "🔧 صحّح نوع " + r.fix.length + " ملف", callback_data: "A|SF_FIX2" }]);
+  rows.push([{ text: "⬅️ رجوع", callback_data: "A|SF" }]);
+  await tgSend(env, adminId, "🪄 وسم وتصحيح تلقائي\n\n" + (parts.length ? parts.join("\n\n") + "\n\nبيروح لمسودة المحتوى ولازم 💾 Save All Changes. اسم الملف الأصلي مبيتلمسش." : "✅ كل الملفات (" + r.total + ") موسومة وأنواعها مطابقة للفولدرات."), { reply_markup: __sfKb(rows) });
 }
-async function __sfAutoRun(env, adminId) {
+async function __sfAutoRun(env, adminId, what) {
   await __searchCfgLoad(env);
   const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
   const cfg = SEARCH_CFG_STATE.cfg;
   const r = __sfAutoPlan(state.db, cfg);
-  for (const { f, norm } of r.plan) __setFileSearch(f, metaToSyntax(norm, cfg), norm);
-  if (r.plan.length) {
+  let done = 0;
+  if (what === "fix") {
+    for (const { f, to } of r.fix) {
+      const next = normalizeSearchMeta({ ...f.search_meta, t: to }, cfg);
+      if (next) { __setFileSearch(f, metaToSyntax(next, cfg), next); done++; }
+    }
+  } else {
+    for (const { f, norm } of r.plan) { __setFileSearch(f, metaToSyntax(norm, cfg), norm); done++; }
+  }
+  if (done) {
     __bumpDraftRev(state.db);
     await __contentSessionPut(env, adminId, state.base_version, state.db, state.base_db, { existingSession: state.session, forceActive: true });
   }
-  return { done: r.plan.length, left: r.untagged - r.plan.length };
+  return { done, left: what === "fix" ? 0 : r.untagged - r.plan.length };
 }
 async function __sfStripField(env, adminId, key) {
   const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
@@ -7503,7 +7532,7 @@ async function __sfShowMain(env, adminId, note, pre) {
     { text: "سطر " + (ri + 1) + " · " + r.length, callback_data: "A|NOP" },
     { text: "➕", callback_data: "A|SF_RS|" + ri + "|+" }
   ]));
-  rows.push([{ text: "➕ فلتر جديد", callback_data: "A|SF_ADD" }, { text: "🪄 وسم تلقائي", callback_data: "A|SF_AUTO" }, { text: "🔄", callback_data: "A|SF_RESET" }]);
+  rows.push([{ text: "➕ فلتر جديد", callback_data: "A|SF_ADD" }, { text: "🪄 وسم وتصحيح", callback_data: "A|SF_AUTO" }, { text: "🔄", callback_data: "A|SF_RESET" }]);
   rows.push(__sfBottomRow(dirty, "A|HOME"));
   await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
@@ -7623,9 +7652,9 @@ async function __sfCallback(env, adminId, op, parts) {
     return true;
   }
   if (op === "SF_AUTO") { await __sfAutoShow(env, adminId); return true; }
-  if (op === "SF_AUTO2") {
-    const r = await __sfAutoRun(env, adminId);
-    await tgSend(env, adminId, "✅ اتوسم " + r.done + " ملف" + (r.left > 0 ? "، و" + r.left + " فضلوا من غير وسم" : "") + ".\nاضغط 💾 Save All Changes عشان يظهروا في الفلاتر.", { reply_markup: __sfKb([[{ text: "⬅️ رجوع", callback_data: "A|SF" }]]) });
+  if (op === "SF_AUTO2" || op === "SF_FIX2") {
+    const r = await __sfAutoRun(env, adminId, op === "SF_FIX2" ? "fix" : "tag");
+    await tgSend(env, adminId, "✅ " + (op === "SF_FIX2" ? "اتصحح نوع " : "اتوسم ") + r.done + " ملف" + (r.left > 0 ? "، و" + r.left + " فضلوا من غير وسم" : "") + ".\nاضغط 💾 Save All Changes عشان يظهروا في الفلاتر.", { reply_markup: __sfKb([[{ text: "🪄 رجوع للوسم", callback_data: "A|SF_AUTO" }, { text: "⬅️ الفلاتر", callback_data: "A|SF" }]]) });
     return true;
   }
   if (op === "SF_DEL") {
