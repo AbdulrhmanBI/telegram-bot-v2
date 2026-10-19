@@ -40,7 +40,7 @@
 import { handleMiniApi } from "./miniapp-api.js";
 import {
   parseAdminSearchInput, normalizeSearchMeta, serializeSearchMeta, describeMeta, shortMeta, codesHelpText,
-  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, filterColumns, DEFAULT_FILTER_COLS, MAX_FILTER_COLS, isDefaultOverrides
+  sanitizeOverrides, applyOverrides, defaultConfig, knownFieldKeys, validateConfig, filterFieldOrder, fieldLabel, fieldKind, isBuiltInField, filterColumns, filterRows, formatValue, formatNumbers, DEFAULT_FILTER_COLS, MAX_FILTER_COLS, isDefaultOverrides, inferFromPath, enumChoices, metaToSyntax
 } from "../public/app/search-core.js";
 
 // Dependencies handed to the Mini App API (all are the bot's own helpers, so the Mini App obeys
@@ -3902,7 +3902,7 @@ async function __searchCfgLoad(env, force = false) {
   return SEARCH_CFG_STATE;
 }
 async function __searchCfgSave(env, raw) {
-  await env.SQL.prepare("CREATE TABLE IF NOT EXISTS search_config (id INTEGER PRIMARY KEY CHECK (id=1), json TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)").run();
+  await env.SQL.prepare("CREATE TABLE IF NOT EXISTS search_config (id INTEGER PRIMARY KEY, json TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)").run();
   const cur = await __searchCfgLoad(env, true);
   const next = __searchCfgBuild(raw, (cur.rev || 0) + 1);
   const toStore = sanitizeOverrides(raw, defaultConfig()).ov;
@@ -6370,6 +6370,7 @@ async function handleAdminCallback(env, q, bag) {
     }
 
     // --- Pending-input buttons (✅ Done / ✖ Cancel under every "send me ..." prompt) ---
+    if (op.startsWith("WZ_")) { return await __wzCallback(env, adminId, chat_id, op, parts); }
     if (op === "SQ_SKIP") {
       const sq = await __contentSessionRawGet(env, adminId);
       const pendQ = sq && sq.state && sq.state.pending;
@@ -6381,8 +6382,9 @@ async function handleAdminCallback(env, q, bag) {
       return true;
     }
     if (op === "SQ_HELP") {
+      await __searchCfgLoad(env);
       await tgSend(env, chat_id,
-        "🔎 Search name help\n\nFormat — any parts, any order, any field:\n[value].field  e.g.  " + __SEARCH_SYNTAX_HINT + "  or  [SCHEDULE].t [3].l [1].sem\nRanges work too: [1-3].n or [1,3,5].n\nPlain words also work: ma lec 2\nA part you leave out means “any”.\nA field that is not in the list below is still stored as custom text.\n\n" + codesHelpText(SEARCH_CFG_STATE.cfg),
+        "🔎 مساعدة\n\nالأسهل: استخدم الأزرار. اللي جاي من الفولدر (🗂) بيتحدد لوحده.\nأو اكتب بالصيغة، أي أجزاء وبأي ترتيب:\n[قيمة].حقل  مثال:  " + __SEARCH_SYNTAX_HINT + "  أو  [SCHEDULE].t [3].l [1].sem\nمدى أرقام: [1-3].n أو [1,3,5].n\nأو كلمات عادية: ma lec 2\nأي جزء مش هتكتبه = أي قيمة.\nحقل مش موجود في القايمة بيتخزن كنص عادي.\n\n" + codesHelpText(SEARCH_CFG_STATE.cfg),
         { noScope: true });
       return true;
     }
@@ -6829,17 +6831,14 @@ async function handleAdminCallback(env, q, bag) {
         if (node.files && node.files[ix]) node.files[ix].caption = null;
         __bumpDraftRev(db);
       } else if (op === "SRCH") {
-        const [k, s] = String(node.display[idx]).split(":");
-        const ix = parseInt(s || "0", 10);
+        const [k, s2] = String(node.display[idx]).split(":");
+        const ix = parseInt(s2 || "0", 10);
         const sf = node.files && node.files[ix];
         if (k !== "F" || !sf) { await tgSend(env, adminId, "Search names are only for files."); return true; }
-        const nextState = { ...(state.session && state.session.state || {}), pending: { panel_mid: __panelMid(adminId), mode: "SEARCH_NAME_DRAFT", target_node_id: node.id, target: { fileIndex: ix } } };
-        await __contentSessionPut(env, adminId, state.base_version, db, state.base_db, { state: nextState, forceActive: true, existingSession: state.session });
-        if (state.session) { state.session.state = nextState; state.session.draft = db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
-        await tgSend(env, adminId,
-          "🔎 Send the search name for this file:\n" + __searchFileLabel(sf) +
-          (sf.search_name ? "\nCurrent: " + sf.search_name : "") +
-          "\n\nExample: " + __SEARCH_SYNTAX_HINT + "  (or: ma lec 2)\nSend - to remove it.", { reply_markup: __pendingKb(false) });
+        // the same guided wizard as for new files (folder-aware, built on the field registry), for this one file
+        await __contentSessionPut(env, adminId, state.base_version, db, state.base_db, { existingSession: state.session, forceActive: true });
+        if (state.session) { state.session.draft = db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
+        await __wzEnter(env, adminId, state, db, node, { panel_mid: __panelMid(adminId), mode: "SEARCH_NAME_Q", target_node_id: node.id, queue: [String(sf.id)], pos: 0, done: 0, prev: null, single: true, fileIndex: ix, ret: "manage" }, "");
         return true;
       } else if (op === "SRCH_CLR") {
         const [k, s] = String(node.display[idx]).split(":");
@@ -7307,75 +7306,9 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
         return true;
       }
 
-      if (pend.mode === "SEARCH_NAME_Q" || pend.mode === "SEARCH_NAME_DRAFT") {
-        const isQ = pend.mode === "SEARCH_NAME_Q";
-        const raw = (m.text || "").trim();
-        const low = raw.toLowerCase();
-        const persist = async (nextState) => {
-          await __contentSessionPut(env, chat_id, state.base_version, db, state.base_db, { state: nextState, forceActive: true, existingSession: state.session });
-          if (state.session) { state.session.state = nextState; state.session.draft = db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
-        };
-        const clearedState = () => __contentClearContentPending(state.session && state.session.state || {});
-        const errText = (why) => "⚠️ " + why + "\n\nExample: " + __SEARCH_SYNTAX_HINT + "  (or: ma lec 2)\nTap ❓ for the list of codes.";
-
-        if (isQ) {
-          const queue = Array.isArray(pend.queue) ? pend.queue : [];
-          const pos = Math.max(0, Number(pend.pos) || 0);
-          const doneBefore = Number(pend.done) || 0;
-          const fileId = queue[pos];
-          const finish = async (doneN, prefix) => {
-            await persist(clearedState());
-            await tgSend(env, chat_id, (prefix ? prefix + "\n" : "") + "✅ Search names: " + doneN + " set, " + (queue.length - doneN) + " without.\nClick 💾 Save All Changes to apply.");
-            await showAdminNode(env, chat_id, db, null, state.session);
-            return true;
-          };
-          if (low === "/done" || low === "/cancel") return await finish(doneBefore, "");
-
-          let prefix = "", setNow = false;
-          if (low === "/skip") prefix = "⏭ Skipped.";
-          else if (!raw) {
-            await tgSend(env, chat_id, "⚠️ Please send the search name as text, or tap ⏭ Skip.", { reply_markup: __searchPromptKb(), noScope: true });
-            return true;
-          } else {
-            const r = parseAdminSearchInput(raw, SEARCH_CFG_STATE.cfg);
-            if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __searchPromptKb(), noScope: true }); return true; }
-            const qf = fileId ? (node.files || []).find(x => String(x.id) === String(fileId)) : null;
-            if (qf) { __setFileSearch(qf, r.name, r.meta); __bumpDraftRev(db); setNow = true; }
-            prefix = "✅ " + describeMeta(r.meta, SEARCH_CFG_STATE.cfg) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "");
-          }
-          const doneN = doneBefore + (setNow ? 1 : 0);
-          const nextPos = pos + 1;
-          if (nextPos >= queue.length) return await finish(doneN, prefix);
-          const nextState = { ...(state.session && state.session.state || {}), pending: { ...pend, pos: nextPos, done: doneN } };
-          await persist(nextState);
-          await __searchPromptSend(env, chat_id, node, queue[nextPos], nextPos + 1, queue.length, prefix);
-          return true;
-        }
-
-        // SEARCH_NAME_DRAFT: edit one existing file from 🗂 Manage content
-        const idx = Number((pend.target || {}).fileIndex);
-        const f = Array.isArray(node.files) ? node.files[idx] : null;
-        if (!raw || low === "/cancel" || low === "/done") {
-          await persist(clearedState());
-          await tgSend(env, chat_id, "Cancelled.");
-          await showManageList(env, chat_id, db);
-          return true;
-        }
-        if (!f) { await tgSend(env, chat_id, "Unable to find file."); return true; }
-        if (raw === "-" || low === "/clear") {
-          __setFileSearch(f, null, null); __bumpDraftRev(db);
-          await persist(clearedState());
-          await tgSend(env, chat_id, "🧹 Search name removed in draft. Click Save to apply.");
-          await showManageList(env, chat_id, db);
-          return true;
-        }
-        const r = parseAdminSearchInput(raw, SEARCH_CFG_STATE.cfg);
-        if (!r.ok) { await tgSend(env, chat_id, errText(r.error), { reply_markup: __pendingKb(false), noScope: true }); return true; }
-        __setFileSearch(f, r.name, r.meta); __bumpDraftRev(db);
-        await persist(clearedState());
-        await tgSend(env, chat_id, "✅ Search name set in draft: " + describeMeta(r.meta, SEARCH_CFG_STATE.cfg) + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : "") + "\nClick Save to apply.");
-        await showManageList(env, chat_id, db);
-        return true;
+      if (pend.mode === "SEARCH_NAME_Q") {
+        const wnode = (db.nodes && db.nodes[String(pend.target_node_id)]) || node;
+        return await __wzHandleText(env, chat_id, state, db, wnode, pend, (m.text || "").trim());
       }
 
       return false;
@@ -7388,24 +7321,53 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
 }
 
 /* ============================================================================
-   SEARCH FILTERS — admin management from the bot (Arabic, one main screen)
+   SEARCH FILTERS — admin management from the bot (Arabic, one main screen, DRAFT + SAVE)
    ----------------------------------------------------------------------------
    What the admin controls is how the filter panel of the Mini App looks:
      • the ORDER of the filters (⬆️⬇️) and which ones are shown (👁/🙈)
-     • how many filters sit side by side in a row (1 – 8)
+     • how many filters sit in EACH row — row 1 can have 3, row 2 one, row 3 two … (➖/➕ per row)
      • each filter's name, the words that find it in the search box, and extra (custom) filters
-   Settings live in the search_config table (see __searchCfgSave) — not in the content draft — and apply at once
-   to the bot and within ~30 s to the Mini App. Stored file metadata is never touched.
+   Nothing goes live until the admin presses 💾 حفظ: edits are kept in a per-admin draft (table search_config,
+   id = DRAFT_BASE + admin id); the live settings are id 1. The Mini App picks the saved settings up within ~30 s.
+   Stored file metadata is never touched. The same registry also drives the file-entry wizard below.
    ============================================================================ */
 const __SF_NUM = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
 const __sfN = (i) => __SF_NUM[i] || String(i) + ".";
+const __SF_DRAFT_BASE = 1000000000000;
+const __sfDraftId = (adminId) => __SF_DRAFT_BASE + Number(adminId);
+const __SF_TABLE_SQL = "CREATE TABLE IF NOT EXISTS search_config (id INTEGER PRIMARY KEY, json TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)";
+const __sfBlank = () => ({ v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, layout: [], fields: {} });
 
-async function __sfRaw(env) {
-  const st = await __searchCfgLoad(env, true);
-  const raw = st.ov ? JSON.parse(JSON.stringify(st.ov)) : { v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, fields: {} };
-  raw.fields = raw.fields || {}; raw.cols = raw.cols || DEFAULT_FILTER_COLS;
-  return raw;
+async function __sfDraftRow(env, adminId) {
+  try { return await env.SQL.prepare("SELECT json FROM search_config WHERE id=?1").bind(__sfDraftId(adminId)).first(); }
+  catch (_) { return null; }                                         // table not there yet = no draft
 }
+// { raw, dirty }: the admin's draft when there is one, otherwise a copy of the live settings.
+async function __sfLoad(env, adminId) {
+  const row = await __sfDraftRow(env, adminId);
+  if (row && row.json) { try { const raw = JSON.parse(row.json); raw.fields = raw.fields || {}; raw.layout = raw.layout || []; raw.cols = raw.cols || DEFAULT_FILTER_COLS; return { raw, dirty: true }; } catch (_) {} }
+  const st = await __searchCfgLoad(env, true);
+  const raw = st.ov ? JSON.parse(JSON.stringify(st.ov)) : __sfBlank();
+  raw.fields = raw.fields || {}; raw.layout = raw.layout || []; raw.cols = raw.cols || DEFAULT_FILTER_COLS;
+  return { raw, dirty: false };
+}
+const __sfRaw = async (env, adminId) => (await __sfLoad(env, adminId)).raw;
+async function __sfStage(env, adminId, raw) {
+  await env.SQL.prepare(__SF_TABLE_SQL).run();
+  await env.SQL.prepare("INSERT INTO search_config(id,json,rev,updated_at) VALUES(?1,?2,0,?3) ON CONFLICT(id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at")
+    .bind(__sfDraftId(adminId), JSON.stringify(sanitizeOverrides(raw, defaultConfig()).ov), Math.floor(Date.now() / 1000)).run();
+}
+async function __sfDrop(env, adminId) {
+  try { await env.SQL.prepare("DELETE FROM search_config WHERE id=?1").bind(__sfDraftId(adminId)).run(); } catch (_) {}
+}
+async function __sfCommit(env, adminId) {
+  const { raw, dirty } = await __sfLoad(env, adminId);
+  if (!dirty) return false;
+  await __searchCfgSave(env, raw);
+  await __sfDrop(env, adminId);
+  return true;
+}
+
 // keys that exist in the stored files (including ones nobody registered)
 async function __sfSeen(env, adminId) {
   const keys = new Set();
@@ -7424,30 +7386,27 @@ function __sfCtx(raw, seenKeys) {
   const entries = [{ meta: Object.fromEntries(seenKeys.map((k) => [k, 1])) }];
   const visible = filterFieldOrder(entries, cfg).filter((k) => all.includes(k));
   const hidden = all.filter((k) => !visible.includes(k));
-  return { cfg, all, visible, hidden, cols: filterColumns(cfg), label: (k) => fieldLabel(k, cfg) };
+  return { cfg, all, visible, hidden, rows: filterRows(visible, cfg), label: (k) => fieldLabel(k, cfg) };
 }
-const __sfSave = (env, raw) => __searchCfgSave(env, raw);
 const __sfKb = (rows) => ({ inline_keyboard: rows });
 
-// the same grid the Mini App draws, as text: "① المستوى   ② الترم   ③ المادة"
+// the same rows the Mini App draws, as text:   سطر 1:  ① المستوى   ② الترم   ③ المادة
 function __sfPreview(cx) {
-  if (!cx.visible.length) return "(لا توجد فلاتر ظاهرة)";
-  const lines = [];
-  for (let i = 0; i < cx.visible.length; i += cx.cols) {
-    lines.push(cx.visible.slice(i, i + cx.cols).map((k, j) => __sfN(i + j + 1) + " " + cx.label(k)).join("    "));
-  }
-  return lines.join("\n");
+  if (!cx.rows.length) return "(لا توجد فلاتر ظاهرة)";
+  let i = 0;
+  return cx.rows.map((r, ri) => "سطر " + (ri + 1) + ":  " + r.map((k) => __sfN(++i) + " " + cx.label(k)).join("   ")).join("\n");
 }
+const __sfSaveRow = (dirty) => (dirty ? [[{ text: "💾 حفظ", callback_data: "A|SF_SAVE" }, { text: "↩️ تجاهل التعديلات", callback_data: "A|SF_DISCARD" }]] : []);
 
 async function __sfShowMain(env, adminId, note) {
-  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const { raw, dirty } = await __sfLoad(env, adminId), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
   const text = (note ? note + "\n\n" : "") +
     "🔎 فلاتر البحث\n\n" +
-    "ده شكل الفلاتر في التطبيق (" + cx.cols + " جنب بعض في كل سطر):\n\n" + __sfPreview(cx) + "\n" +
+    "ده شكل الفلاتر في التطبيق:\n\n" + __sfPreview(cx) + "\n" +
     (cx.hidden.length ? "\n🙈 مخفي: " + cx.hidden.map(cx.label).join("، ") + "\n" : "") +
-    "\n⬆️ ⬇️ لتغيير الترتيب\n🙈 لإخفاء الفلتر  •  👁 لإظهاره\nاضغط على اسم الفلتر لتغيير اسمه أو كلمات البحث عنه.\n\n" +
-    "التغيير بيظهر في التطبيق خلال نص دقيقة تقريباً.";
-  const rows = [];
+    "\n⬆️ ⬇️ لتغيير الترتيب  •  🙈 إخفاء  •  👁 إظهار\n➖ ➕ عدد الفلاتر في كل سطر (كل سطر ليه عدده)\nاضغط على اسم الفلتر لتغيير اسمه أو كلمات البحث عنه.\n\n" +
+    (dirty ? "⚠️ فيه تعديلات لسه ما اتحفظتش. اضغط 💾 حفظ عشان تظهر في التطبيق." : "✅ كل التعديلات محفوظة. أي تغيير هتعمله هيستنى زرار 💾 حفظ.");
+  const rows = [...__sfSaveRow(dirty)];
   cx.visible.forEach((k, i) => rows.push([
     { text: __sfN(i + 1) + " " + cx.label(k), callback_data: "A|SF_ONE|" + k },
     { text: "⬆️", callback_data: "A|SF_U|" + k },
@@ -7455,17 +7414,21 @@ async function __sfShowMain(env, adminId, note) {
     { text: "🙈", callback_data: "A|SF_T|" + k }
   ]));
   for (const k of cx.hidden) rows.push([{ text: "🙈 " + cx.label(k), callback_data: "A|SF_ONE|" + k }, { text: "👁 إظهار", callback_data: "A|SF_T|" + k }]);
-  const colBtn = (n) => ({ text: (cx.cols === n ? "✅ " : "") + n, callback_data: "A|SF_C|" + n });
-  rows.push([{ text: "عدد الفلاتر في السطر:", callback_data: "A|NOP" }]);
-  rows.push([1, 2, 3, 4].map(colBtn));
-  rows.push([5, 6, 7, 8].map(colBtn));
+  if (cx.rows.length) rows.push([{ text: "الأسطر (➖ ➕ عدد الفلاتر):", callback_data: "A|NOP" }]);
+  cx.rows.forEach((r, ri) => rows.push([
+    { text: "➖", callback_data: "A|SF_RS|" + ri + "|-" },
+    { text: "سطر " + (ri + 1) + " · " + r.length, callback_data: "A|NOP" },
+    { text: "➕", callback_data: "A|SF_RS|" + ri + "|+" }
+  ]));
+  rows.push([{ text: "ترتيب سريع (نفس العدد في كل سطر):", callback_data: "A|NOP" }]);
+  rows.push([1, 2, 3, 4, 5, 6].map((n) => ({ text: String(n), callback_data: "A|SF_C|" + n })));
   rows.push([{ text: "➕ فلتر جديد", callback_data: "A|SF_ADD" }, { text: "🔄 الافتراضي", callback_data: "A|SF_RESET" }]);
   rows.push([{ text: "⬅️ رجوع", callback_data: "A|HOME" }]);
   await tgSend(env, adminId, text, { reply_markup: __sfKb(rows) });
 }
 
 async function __sfShowOne(env, adminId, key, note) {
-  const raw = await __sfRaw(env), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+  const { raw, dirty } = await __sfLoad(env, adminId), seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
   if (!cx.all.includes(key)) { await __sfShowMain(env, adminId, "⚠️ الفلتر ده مش موجود."); return; }
   const f = cx.cfg.fields[key] || {};
   const pos = cx.visible.indexOf(key);
@@ -7477,8 +7440,10 @@ async function __sfShowOne(env, adminId, key, note) {
     "الظهور: " + (pos >= 0 ? "ظاهر، رقم " + (pos + 1) : "مخفي") + "\n" +
     "كلمات البحث: " + ((f.words || []).join("، ") || "لا يوجد") + "\n\n" +
     "كلمات البحث هي اللي لو الطالب كتبها في خانة البحث تلاقي الفلتر ده. مثال: لو الكلمات «دكتور، dr» يبقى كتابة «dr ahmed» بتصفي على الحقل ده.\n" +
-    "في كل الأحوال بيشتغل كتابة  " + key + ":قيمة";
+    "في كل الأحوال بيشتغل كتابة  " + key + ":قيمة" +
+    (dirty ? "\n\n⚠️ فيه تعديلات لسه ما اتحفظتش." : "");
   const rows = [
+    ...__sfSaveRow(dirty),
     [{ text: "✏️ تغيير الاسم", callback_data: "A|SF_REN|" + key }, { text: "💬 كلمات البحث", callback_data: "A|SF_WRD|" + key }]
   ];
   if (!isBuiltInField(key) && raw.fields[key]) rows.push([{ text: "🗑 حذف الإعداد", callback_data: "A|SF_DEL|" + key }]);
@@ -7518,10 +7483,17 @@ function __sfNewProblems(oldRaw, newRaw) {
 
 async function __sfCallback(env, adminId, op, parts) {
   const key = String(parts[2] || "").toLowerCase();
-  const raw = await __sfRaw(env);
+  const { raw } = await __sfLoad(env, adminId);
+  const stage = async () => { await __sfStage(env, adminId, raw); await __sfShowMain(env, adminId); return true; };
 
   if (op === "SF") { await __sfShowMain(env, adminId); return true; }
   if (op === "SF_ONE") { await __sfShowOne(env, adminId, key); return true; }
+  if (op === "SF_SAVE") {
+    const ok = await __sfCommit(env, adminId);
+    await __sfShowMain(env, adminId, ok ? "✅ اتحفظ. التغيير هيظهر في التطبيق خلال نص دقيقة تقريباً." : "ℹ️ مفيش تعديلات محتاجة حفظ.");
+    return true;
+  }
+  if (op === "SF_DISCARD") { await __sfDrop(env, adminId); await __sfShowMain(env, adminId, "↩️ اتلغت التعديلات اللي ما اتحفظتش."); return true; }
 
   if (op === "SF_U" || op === "SF_D") {
     const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
@@ -7530,7 +7502,7 @@ async function __sfCallback(env, adminId, op, parts) {
     if (i >= 0 && j >= 0 && j < order.length) {
       [order[i], order[j]] = [order[j], order[i]];
       order.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
-      await __sfSave(env, raw);
+      return stage();
     }
     await __sfShowMain(env, adminId); return true;
   }
@@ -7539,15 +7511,27 @@ async function __sfCallback(env, adminId, op, parts) {
     const cur = { ...(raw.fields[key] || {}) };
     if (cx.hidden.includes(key)) {                           // show: put it last
       delete cur.filter;
-      cur.filterOrder = (cx.visible.length ? cx.visible.length : 0) * 10;
       cx.visible.forEach((k, ix) => { raw.fields[k] = { ...(raw.fields[k] || {}), filterOrder: ix * 10 }; });
+      cur.filterOrder = cx.visible.length * 10;
     } else cur.filter = false;
     raw.fields[key] = cur;
-    await __sfSave(env, raw); await __sfShowMain(env, adminId); return true;
+    return stage();
   }
-  if (op === "SF_C") {
-    const n = Math.max(1, Math.min(MAX_FILTER_COLS, parseInt(parts[2] || "0", 10) || DEFAULT_FILTER_COLS));
-    raw.cols = n; await __sfSave(env, raw); await __sfShowMain(env, adminId); return true;
+  if (op === "SF_RS") {                                      // ➖ / ➕ : how many filters this row holds
+    const seen = await __sfSeen(env, adminId), cx = __sfCtx(raw, seen.keys);
+    const sizes = cx.rows.map((r) => r.length);
+    const i = parseInt(parts[2] || "-1", 10), plus = parts[3] === "+";
+    if (i >= 0 && i < sizes.length) {
+      if (plus && i + 1 < sizes.length) { sizes[i] += 1; sizes[i + 1] -= 1; }
+      else if (!plus && sizes[i] > 1) { sizes[i] -= 1; if (i + 1 < sizes.length) sizes[i + 1] += 1; else sizes.push(1); }
+      raw.layout = sizes.filter((n) => n > 0).map((n) => Math.min(MAX_FILTER_COLS, n));
+    }
+    return stage();
+  }
+  if (op === "SF_C") {                                       // quick: the same count in every row
+    raw.cols = Math.max(1, Math.min(MAX_FILTER_COLS, parseInt(parts[2] || "0", 10) || DEFAULT_FILTER_COLS));
+    raw.layout = [];
+    return stage();
   }
   if (op === "SF_REN") {
     await __sfAskText(env, adminId, "SF_REN", { key }, "✏️ ابعت الاسم الجديد للفلتر «" + key + "» (لحد 30 حرف). مثال: الدكتور\nده الاسم اللي بيظهر بس، والبيانات المخزّنة مبتتغيّرش.");
@@ -7561,20 +7545,14 @@ async function __sfCallback(env, adminId, op, parts) {
     await __sfAskText(env, adminId, "SF_ADD", {}, "➕ فلتر جديد. ابعت:  الكود  الاسم  [text|number]\n\nأمثلة:\n• doctor الدكتور\n• year السنة number\n\nالكود حروف إنجليزي/أرقام/_ وبعدها بتوسم الملفات بـ  [قيمة].الكود");
     return true;
   }
-  if (op === "SF_DEL") {
-    delete raw.fields[key];
-    await __sfSave(env, raw); await __sfShowMain(env, adminId, "✅ اتحذف الإعداد. القيم المخزّنة في الملفات زي ما هي."); return true;
-  }
+  if (op === "SF_DEL") { delete raw.fields[key]; return stage(); }
   if (op === "SF_RESET") {
-    await tgSend(env, adminId, "🔄 ترجّع الترتيب والأسماء والفلاتر الإضافية وعدد الأعمدة للوضع الافتراضي؟\nبيانات الملفات مبتتغيّرش.", { reply_markup: __sfKb([
-      [{ text: "✅ أيوه، رجّعها", callback_data: "A|SF_RESET2" }, { text: "✖️ لأ", callback_data: "A|SF" }]
+    await tgSend(env, adminId, "🔄 ترجّع الترتيب والأسماء والفلاتر الإضافية والأسطر للوضع الافتراضي؟\n(هيتحط في التعديلات، ولازم تضغط 💾 حفظ بعدها). بيانات الملفات مبتتغيّرش.", { reply_markup: __sfKb([
+      [{ text: "✅ أيوه", callback_data: "A|SF_RESET2" }, { text: "✖️ لأ", callback_data: "A|SF" }]
     ]) });
     return true;
   }
-  if (op === "SF_RESET2") {
-    await __sfSave(env, { v: 1, cols: DEFAULT_FILTER_COLS, fields: {} });
-    await __sfShowMain(env, adminId, "✅ رجعت للافتراضي."); return true;
-  }
+  if (op === "SF_RESET2") { await __sfStage(env, adminId, __sfBlank()); await __sfShowMain(env, adminId, "🔄 اتجهّز الوضع الافتراضي."); return true; }
   return false;
 }
 
@@ -7585,7 +7563,7 @@ async function __sfHandleText(env, chat_id, pend, text) {
   const retry = async (msg) => { await tgSend(env, chat_id, msg, { reply_markup: __pendingKb(false), noScope: true }); return "retry"; };
   const back = async (note) => (pend.mode === "SF_ADD" ? __sfShowMain(env, chat_id, note) : __sfShowOne(env, chat_id, String(pend.key || ""), note));
   if (!t || low === "/cancel" || low === "/done") { await back("تم الإلغاء."); return true; }
-  const raw = await __sfRaw(env);
+  const raw = await __sfRaw(env, chat_id);
   const seen = await __sfSeen(env, chat_id);
 
   if (pend.mode === "SF_REN") {
@@ -7593,8 +7571,8 @@ async function __sfHandleText(env, chat_id, pend, text) {
     const label = t.replace(/[\u0000-\u001f<>]/g, "").slice(0, 30).trim();
     if (!label) return retry("⚠️ الاسم فاضي. ابعت اسم أو اضغط إلغاء.");
     raw.fields[key] = { ...(raw.fields[key] || {}), label };
-    await __sfSave(env, raw);
-    await back("✅ الاسم بقى «" + label + "».");
+    await __sfStage(env, chat_id, raw);
+    await back("✅ الاسم بقى «" + label + "». (اضغط 💾 حفظ عشان يظهر في التطبيق)");
     return true;
   }
   if (pend.mode === "SF_WRD") {
@@ -7604,7 +7582,7 @@ async function __sfHandleText(env, chat_id, pend, text) {
     next.fields[key] = { ...(next.fields[key] || {}), words };
     const probs = __sfNewProblems(raw, next);
     if (probs.length) return retry("⚠️ مش اتحفظ:\n• " + probs.join("\n• ") + "\n\nابعت كلمات تانية أو اضغط إلغاء.");
-    await __sfSave(env, next);
+    await __sfStage(env, chat_id, next);
     await back(words.length ? "✅ كلمات البحث: " + words.join("، ") : "✅ اتمسحت كلمات البحث.");
     return true;
   }
@@ -7624,7 +7602,7 @@ async function __sfHandleText(env, chat_id, pend, text) {
     next.fields[key] = { label, kind, words: key.length >= 3 ? [key] : [], ...(kind === "number" && /year/.test(key) ? { max: 2200 } : {}) };
     let note = "";
     if (__sfNewProblems(raw, next).length) { next.fields[key].words = []; note = "\n(مفيش كلمة بحث له لأنها بتتعارض مع فلتر تاني. استخدم " + key + ":قيمة)"; }
-    await __sfSave(env, next);
+    await __sfStage(env, chat_id, next);
     await __sfShowOne(env, chat_id, key, "✅ اتضاف الفلتر «" + label + "»." + note + "\nوسم الملفات بـ  [قيمة]." + key);
     return true;
   }
@@ -9778,35 +9756,190 @@ function __searchFileLabel(f) {
   return icon + " " + nm.slice(0, 80) + cap;
 }
 
-function __searchPromptKb() {
-  return { inline_keyboard: [
-    [{ text: "⏭ Skip this file", callback_data: "A|SQ_SKIP" }, { text: "✅ Finish (skip the rest)", callback_data: "A|PDONE" }],
-    [{ text: "❓ Codes & examples", callback_data: "A|SQ_HELP" }]
-  ] };
+// ----------------------------------------------------------------------------
+// File-entry wizard — the admin's way to give a file its search data.
+// It is built on the SAME registry as search and filters:
+//   • the fields, their order, names and rows are the ones configured under 🔎 فلاتر البحث (custom fields included)
+//   • what the folder tree already says (level, semester, subject, type, "Lec 3" …) is pre-filled — never asked
+//   • enum fields are picked from their dictionary, numbers from buttons, text typed; a field left empty = ANY
+//   • the previous file's choices are offered again (except per-item fields such as the number)
+//   • typing the old  [MA].s [LEC].t [2].n  syntax still works at any moment
+// The same wizard edits a single existing file (🗂 Manage content ▸ 🔎). Every screen has 💾 Save.
+// ----------------------------------------------------------------------------
+const __WZ_SRC_ICON = { path: "🗂", prev: "↪️", you: "" };
+
+function __wzNames(db, nodeId) {
+  let ids = [];
+  try { ids = buildPathToNode(db, nodeId); } catch (_) { ids = []; }
+  return ids.map((id) => String(((db.nodes || {})[String(id)] || {}).name || "").trim()).filter(Boolean);
+}
+const __wzFile = (node, pend) => {
+  const files = (node && node.files) || [];
+  if (pend.single) return files[Number(pend.fileIndex)] || null;
+  return files.find((x) => String(x.id) === String((pend.queue || [])[pend.pos || 0])) || null;
+};
+// Start values for a file: the folder tree, then (for new files) the previous file's choices.
+function __wzInitCur(db, node, f, prev) {
+  const cfg = SEARCH_CFG_STATE.cfg;
+  const meta = {}, src = {};
+  if (f && f.search_meta) {                                  // editing: start from what is stored
+    for (const [k, v] of Object.entries(f.search_meta)) { meta[k] = v; src[k] = "you"; }
+    return { meta, src };
+  }
+  for (const [k, v] of Object.entries(inferFromPath(__wzNames(db, node.id), cfg))) { meta[k] = v; src[k] = "path"; }
+  for (const [k, v] of Object.entries(prev || {})) {
+    const fd = cfg.fields[k];
+    if (meta[k] == null && !(fd && fd.perItem)) { meta[k] = v; src[k] = "prev"; }
+  }
+  return { meta, src };
+}
+const __wzShort = (key, v, cfg) => {
+  const vals = Array.isArray(v) ? v : [v];
+  if (fieldKind(key, cfg) === "number") return formatNumbers(vals.map(Number).sort((a, b) => a - b));
+  return vals.join("/");
+};
+const __wzLong = (key, v, cfg) => {
+  const vals = Array.isArray(v) ? v : [v];
+  if (fieldKind(key, cfg) === "number") return formatNumbers(vals.map(Number).sort((a, b) => a - b));
+  if (fieldKind(key, cfg) === "enum") return vals.map((x) => { const l = formatValue(key, x, "value", cfg); return l !== String(x) ? l + " (" + x + ")" : String(x); }).join("، ");
+  return vals.join("، ");
+};
+// the fields of the wizard: the filter order and rows, then fields hidden from filters, then any other key the file has
+function __wzLayout(cur) {
+  const cfg = SEARCH_CFG_STATE.cfg;
+  const keys = knownFieldKeys(cfg, Object.keys(cur.meta || {}));
+  const entries = [{ meta: Object.fromEntries(keys.map((k) => [k, 1])) }];
+  const visible = filterFieldOrder(entries, cfg).filter((k) => keys.includes(k));
+  const hidden = keys.filter((k) => !visible.includes(k));
+  const rows = filterRows(visible, cfg);
+  const cols = filterColumns(cfg);
+  for (let i = 0; i < hidden.length; i += cols) rows.push(hidden.slice(i, i + cols));
+  return rows;
+}
+function __wzPanel(db, node, pend, f) {
+  const cfg = SEARCH_CFG_STATE.cfg, cur = pend.cur || { meta: {}, src: {} };
+  const total = (pend.queue || []).length, pos = (pend.pos || 0) + 1, last = pos >= total;
+  const lines = [];
+  for (const row of __wzLayout(cur)) for (const k of row) {
+    if (cur.meta[k] == null) continue;
+    lines.push("• " + fieldLabel(k, cfg) + ": " + __wzLong(k, cur.meta[k], cfg) + (cur.src[k] && __WZ_SRC_ICON[cur.src[k]] ? "  " + __WZ_SRC_ICON[cur.src[k]] : ""));
+  }
+  const names = __wzNames(db, node.id);
+  const text = (pend.note ? pend.note + "\n\n" : "") +
+    (pend.single ? "🔎 بيانات البحث للملف" : "🔎 بيانات البحث — ملف " + pos + "/" + total) + "\n" + (f ? __searchFileLabel(f) : "") +
+    (names.length ? "\n🗂 " + names.join(" › ") : "") +
+    "\n\n" + (lines.length ? "المحدد دلوقتي:\n" + lines.join("\n") : "لسه ما اتحددش حاجة (يعني الملف هيظهر مع أي بحث).") +
+    "\n\nاضغط على أي خانة تحت لتحديدها أو تغييرها. اللي مش هتحدده = أي قيمة." +
+    "\nأو ابعت الصيغة مكتوبة وهتتأكد على طول:  " + __SEARCH_SYNTAX_HINT +
+    (Object.values(cur.src).includes("path") ? "\n🗂 جاي من الفولدر" : "") + (Object.values(cur.src).includes("prev") ? "   ↪️ من الملف السابق (راجعه)" : "");
+  const rows = [];
+  for (const row of __wzLayout(cur)) rows.push(row.map((k) => {
+    const v = cur.meta[k], ic = v != null && cur.src[k] ? (__WZ_SRC_ICON[cur.src[k]] || "") : "";
+    return { text: (ic ? ic + " " : "") + fieldLabel(k, cfg) + ": " + (v != null ? __wzShort(k, v, cfg) : "—"), callback_data: "A|WZ_F|" + k };
+  }));
+  rows.push([{ text: pend.single ? "✅ تأكيد" : (last ? "✅ تأكيد وإنهاء" : "✅ تأكيد ← التالي"), callback_data: "A|WZ_OK" }]);
+  const r2 = [{ text: "🧹 مسح الكل", callback_data: "A|WZ_CLR" }];
+  if (!pend.single) r2.unshift({ text: "⏭ تخطي الملف", callback_data: "A|SQ_SKIP" });
+  rows.push(r2);
+  rows.push([{ text: "💾 حفظ وإنهاء", callback_data: "A|WZ_SAVE" }, { text: pend.single ? "✖️ إلغاء" : "⏹ إنهاء", callback_data: "A|PDONE" }]);
+  return { text, reply_markup: { inline_keyboard: rows } };
+}
+function __wzPicker(pend, key) {
+  const cfg = SEARCH_CFG_STATE.cfg, cur = pend.cur || { meta: {} };
+  const kind = fieldKind(key, cfg), label = fieldLabel(key, cfg);
+  const now = cur.meta[key] != null ? __wzLong(key, cur.meta[key], cfg) : "—";
+  const rows = [];
+  let hint = "";
+  if (kind === "enum") {
+    const ch = enumChoices(key, cfg);
+    for (let i = 0; i < ch.length; i += 2) rows.push(ch.slice(i, i + 2).map((c) => ({ text: c.label + " · " + c.value, callback_data: "A|WZ_V|" + key + "|" + c.value })));
+    hint = "اختار من القايمة، أو ابعت الاسم مكتوب (مثلاً ma).";
+  } else if (kind === "number") {
+    const f = cfg.fields[key] || {}, top = Math.min(12, Number.isFinite(f.max) ? f.max : 12);
+    const nums = Array.from({ length: top }, (_, i) => i + 1);
+    for (let i = 0; i < nums.length; i += 4) rows.push(nums.slice(i, i + 4).map((n) => ({ text: String(n), callback_data: "A|WZ_V|" + key + "|" + n })));
+    hint = "اختار رقم، أو ابعت رقم تاني أو مدى مكتوب: 14  أو  1-3  أو  1,3,5";
+  } else hint = "ابعت القيمة مكتوبة.";
+  rows.push([{ text: "🚫 مسح", callback_data: "A|WZ_X|" + key }, { text: "⬅️ رجوع", callback_data: "A|WZ_B" }]);
+  return { text: "🔎 " + label + "\nالحالي: " + now + "\n\n" + hint, reply_markup: { inline_keyboard: rows } };
 }
 
-// Shows the file itself (so voice notes / photos are recognisable) with the question as its caption.
-async function __searchPromptSend(env, chat_id, node, fileId, pos, total, prefix) {
-  const f = ((node && node.files) || []).find(x => String(x.id) === String(fileId));
-  if (!f) return null;
-  const text = (prefix ? prefix + "\n\n" : "") +
-    "🔎 Search name — file " + pos + "/" + total + "\n" + __searchFileLabel(f) +
-    "\n\nSend its search name, for example:\n" + __SEARCH_SYNTAX_HINT + "\n(or simply: ma lec 2)\nA part you leave out means “any”.";
-  const extra = { reply_markup: __searchPromptKb() };
-  const cap = text.slice(0, 1000);
-  let r = null;
-  try {
-    if (f.type === "photo") r = await sendPhoto(env, chat_id, f.id, cap, extra);
-    else if (f.type === "video") r = await sendVideo(env, chat_id, f.id, cap, extra);
-    else if (f.type === "audio") r = await sendAudio(env, chat_id, f.id, cap, extra);
-    else if (f.type === "voice") r = await sendVoice(env, chat_id, f.id, cap, extra);
-    else if (f.type !== "sticker") r = await sendDocument(env, chat_id, f.id, cap, extra);
-  } catch (_) { r = null; }
-  if (!r || r.ok === false) r = await tgSend(env, chat_id, text, { reply_markup: __searchPromptKb(), noScope: true });
-  return r;
+// Sends the file itself (so voice notes / photos are recognisable) and, under it, the wizard panel.
+async function __wzSend(env, chat_id, db, node, pend, f) {
+  if (f && !pend.noFile) {
+    const cap = __searchFileLabel(f).slice(0, 900);
+    try {
+      let r = null;
+      if (f.type === "photo") r = await sendPhoto(env, chat_id, f.id, cap, { noScope: true });
+      else if (f.type === "video") r = await sendVideo(env, chat_id, f.id, cap, { noScope: true });
+      else if (f.type === "audio") r = await sendAudio(env, chat_id, f.id, cap, { noScope: true });
+      else if (f.type === "voice") r = await sendVoice(env, chat_id, f.id, cap, { noScope: true });
+      else if (f.type !== "sticker") r = await sendDocument(env, chat_id, f.id, cap, { noScope: true });
+    } catch (_) {}
+  }
+  const v = pend.pick ? __wzPicker(pend, pend.pick) : __wzPanel(db, node, pend, f);
+  return await tgSend(env, chat_id, v.text, { reply_markup: v.reply_markup, ...(f && !pend.noFile ? { noScope: true } : {}) });
+}
+async function __wzPersist(env, chat_id, state, db, nextState) {
+  await __contentSessionPut(env, chat_id, state.base_version, db, state.base_db, { state: nextState, forceActive: true, existingSession: state.session });
+  if (state.session) { state.session.state = nextState; state.session.draft = db; state.session.draft_active = true; state.session.revision = Number(state.session.revision || 0) + 1; }
 }
 
-// Called when the admin finishes an upload session: asks a search name for every NEW file that has none.
+// Opens the wizard for the file at pend.pos (or the single file). Caller persists nothing yet; this does.
+async function __wzEnter(env, chat_id, state, db, node, pend, note) {
+  await __searchCfgLoad(env);
+  const f = __wzFile(node, pend);
+  const next = { ...pend, pick: null, note: note || "", noFile: false, cur: __wzInitCur(db, node, f, pend.prev) };
+  const nextState = { ...(state.session && state.session.state || {}), pending: next };
+  await __wzPersist(env, chat_id, state, db, nextState);
+  await __wzSend(env, chat_id, db, node, next, f);
+}
+// Redraw the panel of the current file in place (a callback edits its own message).
+async function __wzRedraw(env, chat_id, state, db, node, pend) {
+  const nextState = { ...(state.session && state.session.state || {}), pending: pend };
+  await __wzPersist(env, chat_id, state, db, nextState);
+  await __wzSend(env, chat_id, db, node, { ...pend, noFile: true }, __wzFile(node, pend));
+}
+
+// Confirm the current file (when meta is non-empty), then go to the next one or finish.
+async function __wzConfirm(env, chat_id, state, db, node, pend, opts = {}) {
+  const f = __wzFile(node, pend);
+  const meta = (pend.cur && pend.cur.meta) || {};
+  const norm = normalizeSearchMeta(meta, SEARCH_CFG_STATE.cfg);
+  let doneN = Number(pend.done) || 0, note = "";
+  if (!opts.skip && f && norm) {
+    __setFileSearch(f, metaToSyntax(norm, SEARCH_CFG_STATE.cfg), norm); __bumpDraftRev(db); doneN++;
+    note = "✅ " + describeMeta(norm, SEARCH_CFG_STATE.cfg);
+  } else if (opts.skip) note = "⏭ اتخطى.";
+  else if (f && !norm && pend.single && f.search_meta) { __setFileSearch(f, null, null); __bumpDraftRev(db); note = "🧹 اتمسحت بيانات البحث."; }
+  else note = "ℹ️ الملف ده اتسجّل من غير بيانات بحث.";
+  const prev = norm && !opts.skip ? norm : pend.prev;
+  const nextPos = (pend.pos || 0) + 1;
+  if (pend.single || opts.finishAll || nextPos >= (pend.queue || []).length) return await __wzFinish(env, chat_id, state, db, node, { ...pend, done: doneN, prev }, note, opts.save);
+  await __wzEnter(env, chat_id, state, db, node, { ...pend, pos: nextPos, done: doneN, prev }, note);
+  return true;
+}
+
+async function __wzFinish(env, chat_id, state, db, node, pend, note, save) {
+  const nextState = __contentClearContentPending(state.session && state.session.state || {});
+  await __wzPersist(env, chat_id, state, db, nextState);
+  const total = (pend.queue || []).length, doneN = Number(pend.done) || 0;
+  const summary = (note ? note + "\n" : "") + (pend.single ? "" : "🔎 بيانات البحث: " + doneN + " اتحددت، " + (total - doneN) + " من غير.\n");
+  if (save) {
+    await tgSend(env, chat_id, summary.trim());
+    const res = await __contentAdminSave(env, chat_id);
+    if (pend.ret === "manage") await showManageList(env, chat_id, res && res.db ? res.db : null);
+    else await showAdminNode(env, chat_id, res && res.db ? res.db : null);
+    return true;
+  }
+  const kb = { inline_keyboard: [[{ text: "💾 حفظ الآن", callback_data: "A|CONTENT_SAVE" }, { text: "↩️ تجاهل المسودة", callback_data: "A|CONTENT_DISCARD" }]] };
+  await tgSend(env, chat_id, summary + "\n⚠️ التعديلات في المسودة. اضغط 💾 حفظ عشان تظهر للطلاب.", { reply_markup: kb, noScope: true });
+  if (pend.ret === "manage") await showManageList(env, chat_id, db);
+  else await showAdminNode(env, chat_id, db, null, state.session);
+  return true;
+}
+
+// Called when the admin finishes an upload session: opens the wizard for every NEW file that has none.
 async function __searchQueueStart(env, chat_id, session, pend) {
   const db = session && session.draft;
   if (!db) return false;
@@ -9818,15 +9951,61 @@ async function __searchQueueStart(env, chat_id, session, pend) {
     if (f && !f.search_meta && !queue.includes(String(id))) queue.push(String(id));
   }
   if (!queue.length) return false;
-  const nextState = {
-    ...(session.state || {}),
-    pending: { panel_mid: pend.panel_mid, mode: "SEARCH_NAME_Q", target_node_id: pend.target_node_id, queue, pos: 0, done: 0, count: pend.count || { files: 0, notes: 0, urls: 0 } }
-  };
-  const wr = await __contentSessionStatePut(env, chat_id, nextState, { existingSession: session });
-  if (!wr || !wr.ok) throw new Error("ADMIN_SESSION_CONCURRENT_UPDATE");
-  await __searchPromptSend(env, chat_id, node, queue[0], 1, queue.length,
-    "📎 " + ((pend.count && pend.count.files) || queue.length) + " file(s) added to your draft.");
+  const wp = { panel_mid: pend.panel_mid, mode: "SEARCH_NAME_Q", target_node_id: pend.target_node_id, queue, pos: 0, done: 0, prev: null, count: pend.count || { files: 0, notes: 0, urls: 0 } };
+  const state = { session, base_version: session.base_version, base_db: session.base_db };
+  await __wzEnter(env, chat_id, state, db, node, wp, "📎 اتضاف " + ((pend.count && pend.count.files) || queue.length) + " ملف للمسودة.");
   return true;
+}
+
+// Wizard callbacks (WZ_*). All of them act on the pending SEARCH_NAME_Q of this admin.
+async function __wzCallback(env, adminId, chat_id, op, parts) {
+  const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
+  const db = state.db;
+  const pend = state.session && state.session.state && state.session.state.pending;
+  if (!pend || pend.mode !== "SEARCH_NAME_Q") { await tgSend(env, chat_id, "ℹ️ مفيش إدخال مستني. افتح الملف تاني من 🗂 Manage content.", { noScope: true }); return true; }
+  await __searchCfgLoad(env);
+  const node = db.nodes && db.nodes[String(pend.target_node_id)];
+  if (!node) { await tgSend(env, chat_id, "⚠️ الفولدر مش موجود.", { noScope: true }); return true; }
+  const cfg = SEARCH_CFG_STATE.cfg;
+  const key = String(parts[2] || "").toLowerCase();
+  const cur = pend.cur || { meta: {}, src: {} };
+  const meta = { ...cur.meta }, src = { ...cur.src };
+  const redraw = (extra) => __wzRedraw(env, adminId, state, db, node, { ...pend, cur: { meta, src }, pick: null, note: "", ...(extra || {}) });
+
+  if (op === "WZ_F") { await __wzRedraw(env, adminId, state, db, node, { ...pend, pick: key, note: "" }); return true; }
+  if (op === "WZ_B") { await redraw(); return true; }
+  if (op === "WZ_X") { delete meta[key]; delete src[key]; await redraw(); return true; }
+  if (op === "WZ_V") {
+    const r = parseAdminSearchInput("[" + String(parts.slice(3).join("|")) + "]." + key, cfg);
+    if (r.ok && r.meta && r.meta[key] != null) { meta[key] = r.meta[key]; src[key] = "you"; }
+    await redraw(); return true;
+  }
+  if (op === "WZ_CLR") { await redraw({ cur: { meta: {}, src: {} } }); return true; }
+  if (op === "WZ_OK") return await __wzConfirm(env, adminId, state, db, node, { ...pend, cur: { meta, src } });
+  if (op === "WZ_SAVE") return await __wzConfirm(env, adminId, state, db, node, { ...pend, cur: { meta, src } }, { save: true, finishAll: true });
+  return false;
+}
+
+// Typed text while the wizard is open: a value for the open picker, otherwise the full syntax (confirms at once).
+async function __wzHandleText(env, chat_id, state, db, node, pend, raw) {
+  await __searchCfgLoad(env);
+  const cfg = SEARCH_CFG_STATE.cfg, low = raw.toLowerCase();
+  const reAsk = async (why) => { await tgSend(env, chat_id, "⚠️ " + why + "\nمثال: " + __SEARCH_SYNTAX_HINT + "  (أو: ma lec 2)", { reply_markup: { inline_keyboard: [[{ text: "⏭ تخطي", callback_data: "A|SQ_SKIP" }, { text: "❓ الأكواد", callback_data: "A|SQ_HELP" }]] }, noScope: true }); return true; };
+  if (low === "/done" || low === "/cancel") return await __wzFinish(env, chat_id, state, db, node, pend, "", false);
+  if (low === "/skip") return pend.single ? await __wzFinish(env, chat_id, state, db, node, pend, "", false) : await __wzConfirm(env, chat_id, state, db, node, pend, { skip: true });
+  if (!raw) return await reAsk("ابعت نص أو استخدم الأزرار.");
+  const cur = pend.cur || { meta: {}, src: {} };
+  if (pend.pick) {
+    const r = parseAdminSearchInput("[" + raw + "]." + pend.pick, cfg);
+    if (!r.ok || !r.meta || r.meta[pend.pick] == null) return await reAsk(r.error || "القيمة مش مفهومة.");
+    const meta = { ...cur.meta, [pend.pick]: r.meta[pend.pick] }, src = { ...cur.src, [pend.pick]: "you" };
+    await __wzRedraw(env, chat_id, state, db, node, { ...pend, cur: { meta, src }, pick: null, note: "" });
+    return true;
+  }
+  const r = parseAdminSearchInput(raw, cfg);
+  if (!r.ok) return await reAsk(r.error);
+  const src = Object.fromEntries(Object.keys(r.meta).map((k) => [k, "you"]));
+  return await __wzConfirm(env, chat_id, state, db, node, { ...pend, cur: { meta: r.meta, src } });
 }
 
 // "/done" for any pending input (also used by the ✅ Done button). Caller holds the admin lock.
@@ -9845,6 +10024,12 @@ async function __adminFinishPendingLocked(env, chat_id) {
   }
   if (freshPend.mode === "ATTACH_MULTI" && Array.isArray(freshPend.new_ids) && freshPend.new_ids.length) {
     if (await __searchQueueStart(env, chat_id, fresh, freshPend)) return;
+  }
+  if (freshPend.mode === "SEARCH_NAME_Q" && freshPend.single) {            // closing the one-file editor goes back to the list
+    const nextState1 = __contentClearContentPending(fresh.state || {});
+    await __contentSessionStatePut(env, chat_id, nextState1, { existingSession: fresh });
+    await showManageList(env, chat_id, fresh.draft);
+    return;
   }
   let summary = makeSummary(freshPend);
   if (freshPend.mode === "SEARCH_NAME_Q") {
