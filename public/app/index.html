@@ -81,10 +81,12 @@ h2{margin:6px 0 2px;font-size:20px}
 .fclear.on{visibility:visible}
 .fclear i{display:grid;place-items:center;width:14px;height:14px;border-radius:50%;background:color-mix(in srgb,var(--danger) 16%,transparent);font-style:normal;font-size:10px}
 .fclear:active{background:color-mix(in srgb,var(--danger) 12%,transparent)}
-/* the admin picks N filters per row; a column never gets narrower than 52px, so on a very small screen the row wraps instead of crushing */
-.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(52px,calc((100% - (var(--cols,2) - 1) * 8px) / var(--cols,2))),1fr));gap:8px}
-.fgrid.dense .fb{padding:0 7px;gap:3px;font-size:12.5px}
-.fgrid.dense .fb svg{width:10px;height:10px}
+/* the admin decides how many filters sit in EACH row (row 1 may have 3, row 2 only 1…); a column never gets
+   narrower than 52px, so on a very small screen a row wraps instead of crushing its fields */
+.fgrid{display:flex;flex-direction:column;gap:8px}
+.frow{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(52px,calc((100% - (var(--n,2) - 1) * 8px) / var(--n,2))),1fr));gap:8px}
+.frow.dense .fb{padding:0 7px;gap:3px;font-size:12.5px}
+.frow.dense .fb svg{width:10px;height:10px}
 .fd{display:flex;flex-direction:column;gap:3px;min-width:0}
 .fl{text-align:left;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 2px}
 .fb{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;height:40px;padding:0 10px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;font-size:13.5px;text-align:start}
@@ -195,8 +197,8 @@ h2{margin:6px 0 2px;font-size:20px}
 <script type="module">
 import {
   parseQuery, matchFields, makeEntry, effectiveConstraints, buildContext, groupResults,
-  buildFilterModel, sanitizeFilters, normalizeText, applyOverrides, defaultConfig, filterColumns
-} from "./search-core.js?v=4";
+  buildFilterModel, sanitizeFilters, normalizeText, applyOverrides, defaultConfig, filterRows
+} from "./search-core.js?v=5";
 
 (() => {
 "use strict";
@@ -610,14 +612,13 @@ function renderFilters(){
   btn.classList.toggle("on", hasFilters());
   panel.classList.toggle("show", usable && (S.fOpen || hasFilters()));
   if (!usable) { box.innerHTML = ""; S.fsig = ""; closePop(); return; }
-  const cols = filterColumns(S.cfg);
-  const sig = cols + "|" + S.fmodel.map((f) => f.key).join(",");
+  const rows = filterRows(S.fmodel.map((f) => f.key), S.cfg);
+  const sig = rows.map((r) => r.join(",")).join("|");
   if (S.fsig !== sig) {
     S.fsig = sig; closePop();
-    box.style.setProperty("--cols", String(cols)); box.classList.toggle("dense", cols >= 4);
-    box.innerHTML = S.fmodel.map((f) =>
-      '<div class="fd" data-key="' + esc(f.key) + '"><span class="fl" dir="auto"></span>' +
-      '<button type="button" class="fb" data-fd="' + esc(f.key) + '" aria-haspopup="listbox" aria-expanded="false"><span class="fv" dir="auto"></span>' + CHEV + "</button></div>").join("");
+    box.innerHTML = rows.map((r) => '<div class="frow' + (r.length >= 4 ? " dense" : "") + '" style="--n:' + r.length + '">' + r.map((key) =>
+      '<div class="fd" data-key="' + esc(key) + '"><span class="fl" dir="auto"></span>' +
+      '<button type="button" class="fb" data-fd="' + esc(key) + '" aria-haspopup="listbox" aria-expanded="false"><span class="fv" dir="auto"></span>' + CHEV + "</button></div>").join("") + "</div>").join("");
   }
   const n = Object.keys(S.filters).length;
   $("fTitle").textContent = T("filters") + (n ? " · " + n : "");

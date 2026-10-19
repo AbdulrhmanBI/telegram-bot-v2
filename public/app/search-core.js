@@ -31,31 +31,33 @@ const MAX_TEXT = 80;
 // ----------------------------------------------------------------------------
 // 1. Dictionary — values and aliases of the enum fields. Extend freely.
 //    Codes are STABLE identifiers stored in the data: never rename a code, rename its label.
-//    Entry shape: { name|label, plural?, order?, aliases: [...] }
+//    Entry shape: { name|label, plural?, order?, context?, aliases: [...] }
+//    context: { l: 3, sem: 1 } — where the value lives. Only used to resolve a folder name that is an alias of
+//    several values ("Applied Stat" = Statistics A in semester 1, B in semester 2) when the path already says which.
 // ----------------------------------------------------------------------------
 export const SEARCH_DICTIONARY = {
   subjects: {
     // ---- Level 3 · Semester 1 ----
-    COST: { name: "Cost Accounting", aliases: ["cost", "cost acc", "cost accounting", "تكاليف", "محاسبة التكاليف"] },
-    PF:   { name: "Public Finance", aliases: ["pf", "public finance", "public", "المالية العامة"] },
-    STA:  { name: "Applied Statistics (A)", aliases: ["sta", "stat", "stats", "statistics", "applied stat", "applied statistics", "stat a", "stats a", "statistics a", "applied stat a", "applied statistics a", "احصاء", "الاحصاء"] },
-    IEC:  { name: "International Economics", aliases: ["iec", "inteco", "international eco", "international economics", "intl eco", "اقتصاد دولي", "الاقتصاد الدولي"] },
-    FM:   { name: "Financial Management", aliases: ["fm", "financial management", "الادارة المالية"] },
-    FI:   { name: "Financial Institutions", aliases: ["fi", "financial institutions", "institutions", "المؤسسات المالية"] },
+    COST: { name: "Cost Accounting", context: { l: 3, sem: 1 }, aliases: ["cost", "cost acc", "cost accounting", "تكاليف", "محاسبة التكاليف"] },
+    PF:   { name: "Public Finance", context: { l: 3, sem: 1 }, aliases: ["pf", "public finance", "public", "المالية العامة"] },
+    STA:  { name: "Applied Statistics (A)", context: { l: 3, sem: 1 }, aliases: ["sta", "stat", "stats", "statistics", "applied stat", "applied statistics", "stat a", "stats a", "statistics a", "applied stat a", "applied statistics a", "احصاء", "الاحصاء"] },
+    IEC:  { name: "International Economics", context: { l: 3, sem: 1 }, aliases: ["iec", "inteco", "international eco", "international economics", "intl eco", "اقتصاد دولي", "الاقتصاد الدولي"] },
+    FM:   { name: "Financial Management", context: { l: 3, sem: 1 }, aliases: ["fm", "financial management", "الادارة المالية"] },
+    FI:   { name: "Financial Institutions", context: { l: 3, sem: 1 }, aliases: ["fi", "financial institutions", "institutions", "المؤسسات المالية"] },
     // ---- Level 3 · Semester 2 ----
-    TAX:  { name: "Tax Accounting", aliases: ["tax", "taxes", "tax acc", "tax accounting", "ضرائب", "المحاسبة الضريبية"] },
-    AUD:  { name: "Auditing & Assurance", aliases: ["aud", "audit", "auditing", "auditing assurance", "auditing and assurance", "المراجعة"] },
-    MM:   { name: "Material Management", aliases: ["mm", "material", "materials", "material management", "ادارة المواد"] },
-    IB:   { name: "International Business", aliases: ["ib", "international business", "business", "ادارة الاعمال الدولية"] },
-    EDP:  { name: "Economic Development & Planning", aliases: ["edp", "economic dev", "economic development", "economic dev planning", "economic development planning", "economic development and planning", "تخطيط", "التنمية الاقتصادية"] },
-    STB:  { name: "Applied Statistics (B)", aliases: ["stb", "stat", "stats", "statistics", "applied stat", "applied statistics", "stat b", "stats b", "statistics b", "applied stat b", "applied statistics b"] },
+    TAX:  { name: "Tax Accounting", context: { l: 3, sem: 2 }, aliases: ["tax", "taxes", "tax acc", "tax accounting", "ضرائب", "المحاسبة الضريبية"] },
+    AUD:  { name: "Auditing & Assurance", context: { l: 3, sem: 2 }, aliases: ["aud", "audit", "auditing", "auditing assurance", "auditing and assurance", "المراجعة"] },
+    MM:   { name: "Material Management", context: { l: 3, sem: 2 }, aliases: ["mm", "material", "materials", "material management", "ادارة المواد"] },
+    IB:   { name: "International Business", context: { l: 3, sem: 2 }, aliases: ["ib", "international business", "business", "ادارة الاعمال الدولية"] },
+    EDP:  { name: "Economic Development & Planning", context: { l: 3, sem: 2 }, aliases: ["edp", "economic dev", "economic development", "economic dev planning", "economic development planning", "economic development and planning", "تخطيط", "التنمية الاقتصادية"] },
+    STB:  { name: "Applied Statistics (B)", context: { l: 3, sem: 2 }, aliases: ["stb", "stat", "stats", "statistics", "applied stat", "applied statistics", "stat b", "stats b", "statistics b", "applied stat b", "applied statistics b"] },
     // ---- Level 4 · Accounting · Semester 1 ----
-    AIS:  { name: "Accounting Information Systems", aliases: ["ais", "accounting information systems", "accounting information system", "نظم المعلومات المحاسبية"] },
-    FR:   { name: "Financial Reporting", aliases: ["fr", "financial reporting", "reporting", "التقارير المالية"] },
-    CSYS: { name: "Cost Accounting Systems", aliases: ["csys", "cost", "cost sys", "cost system", "cost systems", "cost acc sys", "cost accounting sys", "cost accounting system", "cost accounting systems"] },
-    MA:   { name: "Managerial Accounting", aliases: ["ma", "managerial", "managerial acc", "managerial accounting", "management accounting", "محاسبة ادارية"] },
-    AMA:  { name: "Advanced Managerial Accounting", aliases: ["ama", "adv ma", "adv managerial", "adv managerial acc", "adv managerial accounting", "advanced managerial", "advanced managerial acc", "advanced managerial accounting", "advanced ma"] },
-    ACST: { name: "Accounting Studies", aliases: ["acst", "accounting studies", "دراسات محاسبية", "دراسات"] }
+    AIS:  { name: "Accounting Information Systems", context: { l: 4, sem: 1 }, aliases: ["ais", "accounting information systems", "accounting information system", "نظم المعلومات المحاسبية"] },
+    FR:   { name: "Financial Reporting", context: { l: 4, sem: 1 }, aliases: ["fr", "financial reporting", "reporting", "التقارير المالية"] },
+    CSYS: { name: "Cost Accounting Systems", context: { l: 4, sem: 1 }, aliases: ["csys", "cost", "cost sys", "cost system", "cost systems", "cost acc sys", "cost accounting sys", "cost accounting system", "cost accounting systems"] },
+    MA:   { name: "Managerial Accounting", context: { l: 4, sem: 1 }, aliases: ["ma", "managerial", "managerial acc", "managerial accounting", "management accounting", "محاسبة ادارية"] },
+    AMA:  { name: "Advanced Managerial Accounting", context: { l: 4, sem: 1 }, aliases: ["ama", "adv ma", "adv managerial", "adv managerial acc", "adv managerial accounting", "advanced managerial", "advanced managerial acc", "advanced managerial accounting", "advanced ma"] },
+    ACST: { name: "Accounting Studies", context: { l: 4, sem: 1 }, aliases: ["acst", "accounting studies", "دراسات محاسبية", "دراسات"] }
   },
 
   types: {
@@ -63,8 +65,8 @@ export const SEARCH_DICTIONARY = {
     REC:        { label: "Record",     plural: "Records",     order: 2,  aliases: ["rec", "recs", "record", "records", "recording", "recordings", "تسجيل", "تسجيلات"] },
     SEC:        { label: "Section",    plural: "Sections",    order: 3,  aliases: ["sec", "secs", "section", "sections", "سكشن", "سيكشن"] },
     SUMMARY:    { label: "Summary",    plural: "Summaries",   order: 4,  aliases: ["summary", "summ", "sum", "summaries", "ملخص", "ملخصات"] },
-    QUESTIONS:  { label: "Questions",  plural: "Questions",   order: 5,  aliases: ["question", "questions", "qs", "اسئلة", "سؤال"] },
-    REVIEW:     { label: "Review",     plural: "Reviews",     order: 6,  aliases: ["review", "reviews", "revision", "rev", "مراجعة"] },
+    QUESTIONS:  { label: "Questions",  plural: "Questions",   order: 5,  aliases: ["question", "questions", "qs", "test bank", "اسئلة", "سؤال"] },
+    REVIEW:     { label: "Review",     plural: "Reviews",     order: 6,  aliases: ["review", "reviews", "revision", "rev", "final rev", "final review", "final revision", "مراجعة"] },
     ASSIGNMENT: { label: "Assignment", plural: "Assignments", order: 7,  aliases: ["assignment", "assignments", "asg", "hw", "homework", "تكليف"] },
     QUIZ:       { label: "Quiz",       plural: "Quizzes",     order: 8,  aliases: ["quiz", "quizzes", "كويز"] },
     EXAM:       { label: "Exam",       plural: "Exams",       order: 9,  aliases: ["exam", "exams", "امتحان", "امتحانات"] },
@@ -97,17 +99,21 @@ export const SEARCH_DICTIONARY = {
 //                They also work as admin tags:  [3].level
 //    bare        a bare number in a query ("ma 2") belongs to this field (at most one field)
 //    chip        how a value is shown in short form ("Level {{v}}")
+//    perItem     the entry wizard never carries this value over from the previous file (a lecture number is per file)
+//    fromPathAlias  (enum) a folder whose name is one unambiguous dictionary alias (optionally followed by a year/number,
+//                "Summaries 2024") gives the value. "outer" = the folder closest to the root wins (a type folder
+//                "Lectures" beats a sub-folder called "Assignment"); "nearest" = the deepest one wins
 //    fromPath    regex (on the normalized folder name) that derives the value from the folder tree,
 //                nearest ancestor wins — so admins never type it
 //    filterOrder position in the dependent filter chain (lower = earlier); filter:false hides it
 // ----------------------------------------------------------------------------
 export const SEARCH_FIELDS = {
-  s:   { label: "Subject",  kind: "enum",   dictionary: "subjects", words: ["subject"], filterOrder: 30 },
-  t:   { label: "Type",     kind: "enum",   dictionary: "types",    words: ["type"],    filterOrder: 40 },
-  n:   { label: "Number",   kind: "number", bare: true, words: ["number", "no", "num"], chip: "#{{v}}", filterOrder: 60 },
+  s:   { label: "Subject",  kind: "enum",   dictionary: "subjects", words: ["subject"], fromPathAlias: "outer", filterOrder: 30 },
+  t:   { label: "Type",     kind: "enum",   dictionary: "types",    words: ["type"],    fromPathAlias: "outer", filterOrder: 40 },
+  n:   { label: "Number",   kind: "number", bare: true, perItem: true, words: ["number", "no", "num"], chip: "#{{v}}", fromPath: "^(?:lec|lecture|rec|record|sec|section|ch|chapter|l|rev|revision|rev ch|revision on ch|formula ch) (\\d+)\\b", filterOrder: 60 },
   l:   { label: "Level",    kind: "number", words: ["level", "lvl", "l"], chip: "Level {{v}}", fromPath: "^level (\\d+)\\b", filterOrder: 10 },
   sem: { label: "Semester", kind: "number", words: ["semester", "sem"], chip: "Semester {{v}}", fromPath: "^semester (\\d+)\\b", filterOrder: 20 },
-  v:   { label: "Variant",  kind: "enum",   dictionary: "variants", filterOrder: 50 },
+  v:   { label: "Variant",  kind: "enum",   dictionary: "variants", fromPathAlias: "nearest", fromPathWhen: { t: "SCHEDULE" }, filterOrder: 50 },
   doctor: { label: "Doctor", kind: "text", words: ["doctor", "dr"], filterOrder: 70 },
   group:  { label: "Group",  kind: "text", words: ["group"],        filterOrder: 80 }
 };
@@ -420,6 +426,52 @@ export function deriveFromPath(names, cfgIn) {
     }
   }
   return out;
+}
+
+// Everything the folder tree already says about a file placed under `names` (root first):
+// regex fields (level, semester, number from "Lec 3"…) and enum fields whose folder name IS an alias
+// ("Managerial Accounting" -> s:MA, "Lectures" -> t:LEC). An ambiguous or unknown folder name gives nothing —
+// never a guess. Used by the admin entry wizard; the same registry drives search, filters and the backfill.
+export function inferFromPath(names, cfgIn) {
+  const c = compile(cfgIn);
+  const list = asArray(names).map(normalizeText).filter(Boolean);
+  const out = deriveFromPath(names, cfgIn);
+  for (const key of c.keys) {
+    const f = c.cfg.fields[key];
+    if (!f || !f.fromPathAlias || kindOf(c, key) !== "enum" || out[key] != null) continue;
+    const order = f.fromPathAlias === "nearest" ? list.map((_, i) => list.length - 1 - i) : list.map((_, i) => i);
+    for (const i of order) {
+      const toks = list[i].split(" ");
+      let code = null;
+      for (let len = toks.length; len >= 1 && !code; len--) {
+        if (!toks.slice(len).every((x) => /^\d+$/.test(x))) continue;          // only a trailing year/number may follow the alias
+        const hit = c.enums[key].get(toks.slice(0, len).join(" "));
+        if (!hit) continue;
+        if (hit.size === 1) code = [...hit][0];
+        else {                                                              // several values share this name: the entry's context may decide
+          const entries = c.cfg.dict[f.dictionary] || {};
+          const ok = [...hit].filter((cd) => Object.entries((entries[cd] && entries[cd].context) || {}).every(([k, v]) => out[k] == null || String(out[k]) === String(v)));
+          if (ok.length === 1) code = ok[0];
+        }
+      }
+      if (code) { out[key] = code; break; }
+    }
+  }
+  for (const key of c.keys) {                                                // "only under …" rules (a variant only means something for schedules)
+    const when = c.cfg.fields[key] && c.cfg.fields[key].fromPathWhen;
+    if (when && out[key] != null && !Object.entries(when).every(([k, v]) => String(out[k]) === String(v))) delete out[key];
+  }
+  return out;
+}
+
+// The values the admin can pick for a field (enum fields): [{ value, label }] in dictionary order.
+export function enumChoices(key, cfgIn) {
+  const c = compile(cfgIn);
+  const f = c.cfg.fields[key];
+  const entries = f && kindOf(c, key) === "enum" ? c.cfg.dict[f.dictionary] : null;
+  if (!entries) return [];
+  return Object.keys(entries).map((code, i) => ({ value: code, label: entries[code].label || entries[code].name || code, order: c.orders[key][code] ?? 1000 + i }))
+    .sort((a, b) => a.order - b.order).map(({ value, label }) => ({ value, label }));
 }
 
 // ----------------------------------------------------------------------------
@@ -958,7 +1010,9 @@ export function groupResults(matches, q, ctx, cfgIn) {
 // ============================================================================
 // 12. Admin-managed overrides — what the filter panel looks like (labels, order, which filters, columns)
 //     plus custom fields. Stored by the bot as one small JSON document and shipped with the content.
-//       { v:1, rev, cols, fields:{ key:{label?,filter?,filterOrder?,words?,kind?,max?} } }
+//       { v:1, rev, cols, layout:[3,2,1], fields:{ key:{label?,filter?,filterOrder?,words?,kind?,max?} } }
+//     layout = how many filters sit in each row (row 1 has 3, row 2 has 2, …); filters that do not fit the list
+//     continue in rows of `cols`. Rows may differ in size.
 //     Rules: a built-in field may be relabelled / reordered / hidden from the panel, but its kind and
 //     dictionary never change; a NEW field is text or number only; keys follow the registry-key rule.
 //     Stored values never depend on any of this (metadata keeps its own canonical order).
@@ -974,11 +1028,17 @@ const cleanLabel = (x) => String(x == null ? "" : x).replace(/[\u0000-\u001f\u20
 export function sanitizeOverrides(raw, baseCfg) {
   const base = (baseCfg && baseCfg.fields) ? baseCfg : DEFAULT_CFG;
   const warnings = [];
-  const ov = { v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, fields: {} };
+  const ov = { v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, layout: [], fields: {} };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ov, warnings };
   ov.rev = Number.isFinite(Number(raw.rev)) ? Math.max(0, Math.floor(Number(raw.rev))) : 0;
   const cols = Math.round(Number(raw.cols));
   if (Number.isFinite(cols) && cols >= 1) ov.cols = Math.min(MAX_FILTER_COLS, cols);
+  if (Array.isArray(raw.layout)) {
+    for (const x of raw.layout.slice(0, 24)) {
+      const n = Math.round(Number(x));
+      if (Number.isFinite(n) && n >= 1) ov.layout.push(Math.min(MAX_FILTER_COLS, n));
+    }
+  }
   const fields = raw.fields && typeof raw.fields === "object" && !Array.isArray(raw.fields) ? raw.fields : {};
   let count = 0;
   for (const [rawKey, f] of Object.entries(fields)) {
@@ -1005,7 +1065,7 @@ export function sanitizeOverrides(raw, baseCfg) {
   return { ov, warnings };
 }
 
-const isDefaultOv = (ov) => !Object.keys(ov.fields).length && ov.cols === DEFAULT_FILTER_COLS;
+const isDefaultOv = (ov) => !Object.keys(ov.fields).length && ov.cols === DEFAULT_FILTER_COLS && !ov.layout.length;
 
 let OV_CACHE = new Map();
 // base cfg + overrides => the effective cfg (identity-stable per overrides content, so the compile cache holds).
@@ -1035,7 +1095,7 @@ export function applyOverrides(baseCfg, ovIn) {
       if (o.max != null) fields[k].max = o.max;
     }
   }
-  const cfg = { ...base, fields, display: { cols: ov.cols } };
+  const cfg = { ...base, fields, display: { cols: ov.cols, layout: ov.layout } };
   if (perBase.size >= 6) perBase.clear();
   perBase.set(ckey, cfg);
   return cfg;
@@ -1048,6 +1108,19 @@ export function filterColumns(cfgIn) {
   const c = compile(cfgIn);
   const n = c.cfg.display && Number(c.cfg.display.cols);
   return Number.isFinite(n) && n >= 1 ? Math.min(MAX_FILTER_COLS, Math.round(n)) : DEFAULT_FILTER_COLS;
+}
+
+// The panel as rows: layout sizes first (row 1 = layout[0] filters, row 2 = layout[1]…), the rest in rows of `cols`.
+export function filterRows(keys, cfgIn) {
+  const c = compile(cfgIn);
+  const d = c.cfg.display || {};
+  const layout = Array.isArray(d.layout) ? d.layout : [];
+  const cols = filterColumns(c.cfg);
+  const rows = [];
+  let i = 0;
+  for (const n of layout) { if (i >= keys.length) break; rows.push(keys.slice(i, i + n)); i += n; }
+  while (i < keys.length) { rows.push(keys.slice(i, i + cols)); i += cols; }
+  return rows;
 }
 
 // Every field the admin can place in the panel: registry + custom + keys seen in data.
