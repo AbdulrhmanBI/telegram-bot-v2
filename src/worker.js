@@ -3878,7 +3878,7 @@ function __searchMetaParse(text) {
 }
 // ---------------------------------------------------------------------------
 // Admin-managed search display config (field labels, filter order, card layout, custom fields).
-// One small JSON document in D1 (table search_config, created on first save; absence = built-in defaults).
+// One small JSON document in D1 (table search_config_draft, created on first save; absence = built-in defaults).
 // Read at most every SEARCH_CFG_TTL_MS per isolate; saving it refreshes this isolate at once and the
 // Mini App picks it up through the content version (".c<rev>").  Never part of the content draft.
 // ---------------------------------------------------------------------------
@@ -7335,19 +7335,19 @@ async function __adminHandlePendingLocked(env, m, pend, bag) {
      • the ORDER of the filters (⬆️⬇️) and which ones are shown (👁/🙈)
      • how many filters sit in EACH row — row 1 can have 3, row 2 one, row 3 two … (➖/➕ per row)
      • each filter's name, the words that find it in the search box, and extra (custom) filters
-   Nothing goes live until the admin presses 💾 حفظ: edits are kept in a per-admin draft (table search_config,
+   Nothing goes live until the admin presses 💾 حفظ: edits are kept in a per-admin draft (table search_config_draft,
    id = DRAFT_BASE + admin id); the live settings are id 1. The Mini App picks the saved settings up within ~30 s.
    Stored file metadata is never touched. The same registry also drives the file-entry wizard below.
    ============================================================================ */
 const __SF_NUM = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
 const __sfN = (i) => __SF_NUM[i] || String(i) + ".";
-const __SF_DRAFT_BASE = 1000000000000;
-const __sfDraftId = (adminId) => __SF_DRAFT_BASE + Number(adminId);
-const __SF_TABLE_SQL = "CREATE TABLE IF NOT EXISTS search_config (id INTEGER PRIMARY KEY, json TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)";
+// Drafts live in their OWN table (one row per admin). They must not share `search_config`: on a database where that
+// table was created with CHECK(id=1) (a single live row) any other id is rejected.
+const __SF_TABLE_SQL = "CREATE TABLE IF NOT EXISTS search_config_draft (admin_id INTEGER PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER)";
 const __sfBlank = () => ({ v: 1, rev: 0, cols: DEFAULT_FILTER_COLS, layout: [], fields: {} });
 
 async function __sfDraftRow(env, adminId) {
-  try { return await env.SQL.prepare("SELECT json FROM search_config WHERE id=?1").bind(__sfDraftId(adminId)).first(); }
+  try { return await env.SQL.prepare("SELECT json FROM search_config_draft WHERE admin_id=?1").bind(Number(adminId)).first(); }
   catch (_) { return null; }                                         // table not there yet = no draft
 }
 // { raw, dirty }: the admin's draft when there is one, otherwise a copy of the live settings.
@@ -7363,11 +7363,11 @@ const __sfRaw = async (env, adminId) => (await __sfLoad(env, adminId)).raw;
 let __SF_TABLE_READY = false;
 async function __sfStage(env, adminId, raw) {
   if (!__SF_TABLE_READY) { await env.SQL.prepare(__SF_TABLE_SQL).run(); __SF_TABLE_READY = true; }
-  await env.SQL.prepare("INSERT INTO search_config(id,json,rev,updated_at) VALUES(?1,?2,0,?3) ON CONFLICT(id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at")
-    .bind(__sfDraftId(adminId), JSON.stringify(sanitizeOverrides(raw, defaultConfig()).ov), Math.floor(Date.now() / 1000)).run();
+  await env.SQL.prepare("INSERT INTO search_config_draft(admin_id,json,updated_at) VALUES(?1,?2,?3) ON CONFLICT(admin_id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at")
+    .bind(Number(adminId), JSON.stringify(sanitizeOverrides(raw, defaultConfig()).ov), Math.floor(Date.now() / 1000)).run();
 }
 async function __sfDrop(env, adminId) {
-  try { await env.SQL.prepare("DELETE FROM search_config WHERE id=?1").bind(__sfDraftId(adminId)).run(); } catch (_) {}
+  try { await env.SQL.prepare("DELETE FROM search_config_draft WHERE admin_id=?1").bind(Number(adminId)).run(); } catch (_) {}
 }
 async function __sfCommit(env, adminId, knownRaw) {
   let raw = knownRaw, dirty = !!knownRaw;
