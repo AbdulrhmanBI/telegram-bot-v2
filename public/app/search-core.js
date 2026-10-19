@@ -72,9 +72,15 @@ export const SEARCH_DICTIONARY = {
     EXAM:       { label: "Exam",       plural: "Exams",       order: 9,  aliases: ["exam", "exams", "امتحان", "امتحانات"] },
     NOTES:      { label: "Notes",      plural: "Notes",       order: 10, aliases: ["note", "notes"] },
     BOOK:       { label: "Book",       plural: "Books",       order: 11, aliases: ["book", "books", "كتاب", "كتب"] },
-    COURSE:     { label: "Course",     plural: "Courses",     order: 12, aliases: ["course", "courses", "crs", "كورس", "كورسات"] },
-    SCHEDULE:   { label: "Schedule",   plural: "Schedules",   order: 13, aliases: ["schedule", "schedules", "class schedule", "class schedules", "جدول", "جداول", "جدول المحاضرات"] },
-    APPENDIX:   { label: "Appendix",   plural: "Appendices",  order: 14, aliases: ["appendix", "appendices", "ملحق", "ملاحق"] }
+    ANSWERS:    { label: "Answers",    plural: "Answers",     order: 5.5, aliases: ["answer", "answers", "ans", "answer key", "answers key", "model answer", "model answers", "اجابة", "اجابات", "إجابة", "إجابات"] },
+    // Course providers. A file under a provider folder is that provider's, whatever sub-folders it sits in.
+    // "course"/"courses" typed in a search matches both (several values may share a word); a folder just called "Courses" gives nothing.
+    YG:         { label: "Yalla Gam3a", plural: "Yalla Gam3a", order: 12, sticky: true, aliases: ["yg", "yalla gam3a", "yalla gama3a", "yalla gamaa", "يلا جامعة", "course", "courses", "crs", "كورس", "كورسات"] },
+    KAYAN:      { label: "Kayan",      plural: "Kayan",       order: 12.5, sticky: true, aliases: ["kayan", "kayan old edition", "كيان", "course", "courses", "crs", "كورس", "كورسات"] },
+    // Retired: kept ONLY so files tagged COURSE earlier stay valid. Not offered in pickers, never inferred.
+    COURSE:     { label: "Course",     plural: "Courses",     order: 99, deprecated: true, aliases: [] },
+    SCHEDULE:   { label: "Schedule",   plural: "Schedules",   order: 14, sticky: true, aliases: ["schedule", "schedules", "class schedule", "class schedules", "جدول", "جداول", "جدول المحاضرات"] },
+    APPENDIX:   { label: "Appendix",   plural: "Appendices",  order: 15, aliases: ["appendix", "appendices", "ملحق", "ملاحق"] }
   },
 
   // Sub-kind of an item (used by schedules today: by halls / by groups / …)
@@ -101,15 +107,17 @@ export const SEARCH_DICTIONARY = {
 //    chip        how a value is shown in short form ("Level {{v}}")
 //    perItem     the entry wizard never carries this value over from the previous file (a lecture number is per file)
 //    fromPathAlias  (enum) a folder whose name is one unambiguous dictionary alias (optionally followed by a year/number,
-//                "Summaries 2024") gives the value. "outer" = the folder closest to the root wins (a type folder
-//                "Lectures" beats a sub-folder called "Assignment"); "nearest" = the deepest one wins
+//                "Summaries 2024") gives the value. "outer" = the folder closest to the root wins; "nearest" = the deepest one wins;
+//                "deep" (types) = the deepest un-numbered folder wins, so "Lectures › Lec 2 › Assignment" is an Assignment,
+//                while "Summaries › Lec 1" stays a Summary ("Lec 1" is only the numbered container). A dictionary entry with
+//                sticky:true (a course provider) is final: nothing inside it re-types the file
 //    fromPath    regex (on the normalized folder name) that derives the value from the folder tree,
 //                nearest ancestor wins — so admins never type it
 //    filterOrder position in the dependent filter chain (lower = earlier); filter:false hides it
 // ----------------------------------------------------------------------------
 export const SEARCH_FIELDS = {
   s:   { label: "Subject",  kind: "enum",   dictionary: "subjects", words: ["subject"], fromPathAlias: "outer", filterOrder: 30 },
-  t:   { label: "Type",     kind: "enum",   dictionary: "types",    words: ["type"],    fromPathAlias: "outer", filterOrder: 40 },
+  t:   { label: "Type",     kind: "enum",   dictionary: "types",    words: ["type"],    fromPathAlias: "deep", filterOrder: 40 },
   n:   { label: "Number",   kind: "number", bare: true, perItem: true, words: ["number", "no", "num"], chip: "#{{v}}", fromPath: "^(?:lec|lecture|rec|record|sec|section|ch|chapter|l|rev|revision|rev ch|revision on ch|formula ch) (\\d+)\\b", filterOrder: 60 },
   l:   { label: "Level",    kind: "number", words: ["level", "lvl", "l"], chip: "Level {{v}}", fromPath: "^level (\\d+)\\b", filterOrder: 10 },
   sem: { label: "Semester", kind: "number", words: ["semester", "sem"], chip: "Semester {{v}}", fromPath: "^semester (\\d+)\\b", filterOrder: 20 },
@@ -439,23 +447,33 @@ export function inferFromPath(names, cfgIn) {
   for (const key of c.keys) {
     const f = c.cfg.fields[key];
     if (!f || !f.fromPathAlias || kindOf(c, key) !== "enum" || out[key] != null) continue;
-    const order = f.fromPathAlias === "nearest" ? list.map((_, i) => list.length - 1 - i) : list.map((_, i) => i);
-    for (const i of order) {
+    const entries = c.cfg.dict[f.dictionary] || {};
+    // what one folder name says: { code, numbered }  (a trailing small number = a numbered container such as "Lec 2")
+    const read = (i) => {
       const toks = list[i].split(" ");
-      let code = null;
-      for (let len = toks.length; len >= 1 && !code; len--) {
-        if (!toks.slice(len).every((x) => /^\d+$/.test(x))) continue;          // only a trailing year/number may follow the alias
+      for (let len = toks.length; len >= 1; len--) {
+        const tail = toks.slice(len);
+        if (!tail.every((x) => /^\d+$/.test(x))) continue;                    // only a trailing year/number may follow the alias
         const hit = c.enums[key].get(toks.slice(0, len).join(" "));
         if (!hit) continue;
+        let code = null;
         if (hit.size === 1) code = [...hit][0];
         else {                                                              // several values share this name: the entry's context may decide
-          const entries = c.cfg.dict[f.dictionary] || {};
           const ok = [...hit].filter((cd) => Object.entries((entries[cd] && entries[cd].context) || {}).every(([k, v]) => out[k] == null || String(out[k]) === String(v)));
           if (ok.length === 1) code = ok[0];
         }
+        if (code) return { code, numbered: tail.some((x) => Number(x) < 1000) };
       }
-      if (code) { out[key] = code; break; }
-    }
+      return null;
+    };
+    const found = list.map((_, i) => read(i)).filter(Boolean);
+    let pick = null;
+    if (f.fromPathAlias === "deep") {
+      pick = found.find((x) => entries[x.code] && entries[x.code].sticky)       // a provider folder is final
+        || [...found].reverse().find((x) => !x.numbered)                         // else the deepest plain folder
+        || found[0];                                                             // else the outermost numbered one
+    } else pick = f.fromPathAlias === "nearest" ? found[found.length - 1] : found[0];
+    if (pick) out[key] = pick.code;
   }
   for (const key of c.keys) {                                                // "only under …" rules (a variant only means something for schedules)
     const when = c.cfg.fields[key] && c.cfg.fields[key].fromPathWhen;
@@ -464,13 +482,34 @@ export function inferFromPath(names, cfgIn) {
   return out;
 }
 
+// What the OLD rule (before sub-folders could re-type a file) said the type of this folder path was: the outermost folder that
+// names a type, and a folder called "Courses" meant COURSE. Used only to tell machine-made tags from hand-made ones when
+// correcting types, so a type the admin chose on purpose is never overwritten.
+export function legacyTypeFromPath(names, cfgIn) {
+  const c = compile(cfgIn);
+  const f = c.cfg.fields.t;
+  if (!f || kindOf(c, "t") !== "enum") return null;
+  for (const raw of asArray(names)) {
+    const name = normalizeText(raw);
+    if (!name) continue;
+    if (/^(courses?|crs|كورس|كورسات)( \d+)?$/.test(name)) return "COURSE";
+    const toks = name.split(" ");
+    for (let len = toks.length; len >= 1; len--) {
+      if (!toks.slice(len).every((x) => /^\d+$/.test(x))) continue;
+      const hit = c.enums.t.get(toks.slice(0, len).join(" "));
+      if (hit && hit.size === 1) return [...hit][0];
+    }
+  }
+  return null;
+}
+
 // The values the admin can pick for a field (enum fields): [{ value, label }] in dictionary order.
 export function enumChoices(key, cfgIn) {
   const c = compile(cfgIn);
   const f = c.cfg.fields[key];
   const entries = f && kindOf(c, key) === "enum" ? c.cfg.dict[f.dictionary] : null;
   if (!entries) return [];
-  return Object.keys(entries).map((code, i) => ({ value: code, label: entries[code].label || entries[code].name || code, order: c.orders[key][code] ?? 1000 + i }))
+  return Object.keys(entries).filter((code) => !(entries[code] && entries[code].deprecated)).map((code, i) => ({ value: code, label: entries[code].label || entries[code].name || code, order: c.orders[key][code] ?? 1000 + i }))
     .sort((a, b) => a.order - b.order).map(({ value, label }) => ({ value, label }));
 }
 
