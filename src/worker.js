@@ -7467,30 +7467,29 @@ async function __sfAutoShow(env, adminId) {
     parts.push("🔧 " + r.fix.length + " ملف نوعه غالباً غلط (الفولدر جواه نوع تاني):\n" + t + "\nاللي حطيت نوعه بإيدك مختلف عن الفولدر مش هيتغيّر.");
   }
   const rows = [];
-  if (r.plan.length) rows.push([{ text: "✅ وسّم " + r.plan.length + " ملف", callback_data: "A|SF_AUTO2" }]);
-  if (r.fix.length) rows.push([{ text: "🔧 صحّح نوع " + r.fix.length + " ملف", callback_data: "A|SF_FIX2" }]);
+  if (r.plan.length || r.fix.length) rows.push([{ text: "✅ نفّذ" + (r.plan.length ? " · وسم " + r.plan.length : "") + (r.fix.length ? " · تصحيح " + r.fix.length : ""), callback_data: "A|SF_AUTO2" }]);
   rows.push([{ text: "⬅️ رجوع", callback_data: "A|SF" }]);
   await tgSend(env, adminId, "🪄 وسم وتصحيح تلقائي\n\n" + (parts.length ? parts.join("\n\n") + "\n\nبيروح لمسودة المحتوى ولازم 💾 Save All Changes. اسم الملف الأصلي مبيتلمسش." : "✅ كل الملفات (" + r.total + ") موسومة وأنواعها مطابقة للفولدرات."), { reply_markup: __sfKb(rows) });
 }
-async function __sfAutoRun(env, adminId, what) {
+async function __sfAutoRun(env, adminId) {
   await __searchCfgLoad(env);
   const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
   const cfg = SEARCH_CFG_STATE.cfg;
   const r = __sfAutoPlan(state.db, cfg);
-  let done = 0;
-  if (what === "fix") {
-    for (const { f, to } of r.fix) {
-      const next = normalizeSearchMeta({ ...f.search_meta, t: to }, cfg);
-      if (next) { __setFileSearch(f, metaToSyntax(next, cfg), next); done++; }
-    }
-  } else {
-    for (const { f, norm } of r.plan) { __setFileSearch(f, metaToSyntax(norm, cfg), norm); done++; }
+  let tagged = 0, fixed = 0;
+  for (const { f, norm } of r.plan) { __setFileSearch(f, metaToSyntax(norm, cfg), norm); tagged++; }
+  for (const { f, to } of r.fix) {
+    const next = normalizeSearchMeta({ ...f.search_meta, t: to }, cfg);
+    if (next) { __setFileSearch(f, metaToSyntax(next, cfg), next); fixed++; }
   }
-  if (done) {
+  if (tagged || fixed) {
     __bumpDraftRev(state.db);
     await __contentSessionPut(env, adminId, state.base_version, state.db, state.base_db, { existingSession: state.session, forceActive: true });
   }
-  return { done, left: what === "fix" ? 0 : r.untagged - r.plan.length };
+  // the types as they are NOW in the draft (so the admin can see the result before saving)
+  const counts = {};
+  for (const node of Object.values(state.db.nodes || {})) for (const f of (node.files || [])) { const t = f && f.search_meta && f.search_meta.t; if (t) counts[t] = (counts[t] || 0) + 1; }
+  return { tagged, fixed, left: r.untagged - r.plan.length, counts };
 }
 async function __sfStripField(env, adminId, key) {
   const state = await __contentGetWorkingDraft(env, adminId, { fresh: true });
@@ -7653,8 +7652,12 @@ async function __sfCallback(env, adminId, op, parts) {
   }
   if (op === "SF_AUTO") { await __sfAutoShow(env, adminId); return true; }
   if (op === "SF_AUTO2" || op === "SF_FIX2") {
-    const r = await __sfAutoRun(env, adminId, op === "SF_FIX2" ? "fix" : "tag");
-    await tgSend(env, adminId, "✅ " + (op === "SF_FIX2" ? "اتصحح نوع " : "اتوسم ") + r.done + " ملف" + (r.left > 0 ? "، و" + r.left + " فضلوا من غير وسم" : "") + ".\nاضغط 💾 Save All Changes عشان يظهروا في الفلاتر.", { reply_markup: __sfKb([[{ text: "🪄 رجوع للوسم", callback_data: "A|SF_AUTO" }, { text: "⬅️ الفلاتر", callback_data: "A|SF" }]]) });
+    const r = await __sfAutoRun(env, adminId);
+    await __searchCfgLoad(env);
+    const cfg = SEARCH_CFG_STATE.cfg;
+    const types = Object.entries(r.counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => formatValue("t", c, "value", cfg) + " " + n).join(" • ");
+    await tgSend(env, adminId, "✅ اتوسم " + r.tagged + " ملف، واتصحح نوع " + r.fixed + " ملف" + (r.left > 0 ? " (" + r.left + " فضلوا من غير وسم)" : "") + ".\n\nالأنواع دلوقتي في المسودة:\n" + types +
+      "\n\n⚠️ لسه ما اتحفظش. اضغط 💾 Save All Changes عشان يتغيّر في التطبيق.", { reply_markup: __sfKb([[{ text: "💾 Save All Changes", callback_data: "A|CONTENT_SAVE" }], [{ text: "⬅️ الفلاتر", callback_data: "A|SF" }]]) });
     return true;
   }
   if (op === "SF_DEL") {
