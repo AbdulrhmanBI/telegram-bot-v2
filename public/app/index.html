@@ -81,6 +81,8 @@ h2{margin:6px 0 2px;font-size:20px}
 
 /* files */
 .files{display:flex;flex-direction:column;gap:8px}
+/* Search grouping may render adjacent .files wrappers when a group has no visible heading. Preserve the same row gap across those wrapper boundaries. */
+.files + .files{margin-top:8px}
 .file{width:100%;display:flex;gap:11px;align-items:center;text-align:start;background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:11px 12px}
 .file[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
 .chk{flex:none;width:24px;height:24px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:14px;color:transparent}
