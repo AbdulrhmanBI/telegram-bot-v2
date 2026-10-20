@@ -98,26 +98,26 @@ h2{margin:6px 0 2px;font-size:20px}
 .sub-h:first-of-type{margin-top:6px}
 .grp{margin:12px 2px 6px;font-size:13px;font-weight:650;color:var(--accent)}
 .hint{margin-top:6px;font-size:13px;color:var(--muted)}
-/* filter panel — normal flow below the sticky header (never inside it), fixed structure while typing */
-.fpanel{display:none;padding:8px 12px 2px}
+/* Compact filter panel — reduce vertical footprint while keeping controls readable and tappable. */
+.fpanel{display:none;padding:4px 12px 0}
 .fpanel.show{display:block}
-.fhead{display:flex;align-items:center;justify-content:space-between;height:26px;margin-bottom:6px}
-.ftl{font-size:12px;font-weight:650;color:var(--muted);letter-spacing:.02em}
-.fclear{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 10px 0 8px;border:1px solid color-mix(in srgb,var(--danger) 35%,transparent);background:transparent;color:var(--danger);border-radius:999px;font-size:12px;line-height:1;visibility:hidden}
+.fhead{display:flex;align-items:center;justify-content:space-between;height:20px;margin-bottom:3px}
+.ftl{font-size:12px;font-weight:650;color:var(--muted);letter-spacing:.02em;line-height:1.15}
+.fclear{display:inline-flex;align-items:center;gap:4px;height:21px;padding:0 8px 0 7px;border:1px solid color-mix(in srgb,var(--danger) 35%,transparent);background:transparent;color:var(--danger);border-radius:999px;font-size:11.5px;line-height:1;visibility:hidden}
 .fclear.on{visibility:visible}
 .fclear i{display:grid;place-items:center;width:14px;height:14px;border-radius:50%;background:color-mix(in srgb,var(--danger) 16%,transparent);font-style:normal;font-size:10px}
 .fclear:active{background:color-mix(in srgb,var(--danger) 12%,transparent)}
 /* the admin decides how many filters sit in EACH row (row 1 may have 3, row 2 only 1…); a column never gets
    narrower than 52px, so on a very small screen a row wraps instead of crushing its fields */
-.fgrid{display:flex;flex-direction:column;gap:8px}
-.frow{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(52px,calc((100% - (var(--n,2) - 1) * 8px) / var(--n,2))),1fr));gap:8px}
+.fgrid{display:flex;flex-direction:column;gap:4px}
+.frow{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(52px,calc((100% - (var(--n,2) - 1) * 6px) / var(--n,2))),1fr));gap:6px}
 .frow.dense .fb{padding:0 7px;gap:3px;font-size:12.5px}
 .frow.dense .fb svg{width:10px;height:10px}
-.fd{display:flex;flex-direction:column;gap:3px;min-width:0}
-.fl{text-align:left;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 2px}
-.fb{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;height:40px;padding:0 10px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;font-size:13.5px;text-align:start}
+.fd{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fl{text-align:left;font-size:10.5px;line-height:1.1;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 2px}
+.fb{display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;height:32px;padding:0 8px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:9px;font-size:13px;line-height:1.2;text-align:start}
 .fb .fv{flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fb svg{flex:none;width:14px;height:14px;opacity:.6;transition:transform .12s}
+.fb svg{flex:none;width:12px;height:12px;opacity:.6;transition:transform .12s}
 .fb.on{border-color:var(--accent);background:var(--accent-soft)}
 .fb[aria-expanded="true"]{border-color:var(--accent)}
 .fb[aria-expanded="true"] svg{transform:rotate(180deg)}
