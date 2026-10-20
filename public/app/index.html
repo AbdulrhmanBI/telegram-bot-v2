@@ -15,7 +15,7 @@
 }
 :root[data-theme="dark"]{
   --bg:#0e1320;--card:#171e30;--text:#e8ecf6;--muted:#93a0b8;--line:#26304a;
-  --accent:#5B9BFF;--accent-soft:color-mix(in srgb, var(--accent) 18%, var(--card));--accent-text:#0b1220;
+  --accent:#1D4ED8;--accent-soft:color-mix(in srgb, var(--accent) 18%, var(--card));--accent-text:#FFFFFF;
   --ok:#34c78a;--danger:#f0645a;--shadow:0 6px 24px rgba(0,0,0,.5);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -37,7 +37,7 @@ button{cursor:pointer}
 .search:focus{border-color:var(--accent)}
 .iconbtn{flex:none;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-size:16px}
 #fBtn{width:38px;height:38px;color:var(--text)}
-:root[data-theme="dark"] #fBtn{color:#5B9BFF}
+:root[data-theme="dark"] #fBtn{color:var(--accent)}
 .filter-settings-icon{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .crumbs{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:13px;color:var(--muted)}
 .crumbs:empty{display:none}
@@ -159,14 +159,14 @@ h2{margin:6px 0 2px;font-size:20px}
 .pill{background:rgba(255,255,255,.22);border-radius:999px;padding:2px 10px;font-size:13px}
 .cart-action-label,.send-action-label{display:inline-flex;align-items:center;gap:7px}
 .cart-icon-svg,.send-icon-svg{display:none;width:16px;height:16px;flex:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;fill:none}
-/* Primary delivery actions use Classic Royal by default, with a Dark Mode Cool Sapphire experiment. */
+/* Primary delivery actions use Classic Royal (#1D4ED8). */
 .cartbtn{background-color:#1D4ED8;border:1px solid #1D4ED8;color:#FFFFFF}
 .cartbtn .pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.30);color:#FFFFFF}
 .btn.primary[data-act="send"]{background-color:#1D4ED8;border-color:#1D4ED8;color:#FFFFFF}
-/* Dark Mode experiment: use Cool Sapphire (#5B9BFF) for every blue accent, including primary actions. */
+/* Keep all Dark Mode blue accents and primary actions in Classic Royal (#1D4ED8). */
 :root[data-theme="dark"] .cartbtn,
-:root[data-theme="dark"] .btn.primary[data-act="send"]{background-color:#5B9BFF;border-color:#5B9BFF;color:#FFFFFF}
-:root[data-theme="dark"] .cartbtn .pill{background:rgba(10,24,46,.22);border:1px solid rgba(10,24,46,.28);color:#FFFFFF}
+:root[data-theme="dark"] .btn.primary[data-act="send"]{background-color:#1D4ED8;border-color:#1D4ED8;color:#FFFFFF}
+:root[data-theme="dark"] .cartbtn .pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.30);color:#FFFFFF}
 :root[data-theme="dark"] .cartbtn .cart-action-label,
 :root[data-theme="dark"] .btn.primary[data-act="send"] .send-action-label{text-shadow:0 1px 2px rgba(5,18,40,.45)}
 .cartbtn .cart-icon-emoji,
