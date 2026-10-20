@@ -27,30 +27,23 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-/* Scrolling memories background: one seamless column of complete vertical posters. */
+/* Option A — a narrow moving memory strip, while the original app background stays untouched. */
 .memory-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--bg);isolation:isolate}
-.memory-bg-columns{position:absolute;inset:0;display:block;overflow:hidden;padding:0}
-.memory-bg-column{width:100%;height:100%;overflow:hidden}
-.memory-bg-strip{display:flex;flex-direction:column;gap:0;will-change:transform;animation:memory-drift var(--memory-duration,48s) linear infinite;animation-delay:var(--memory-delay,0s);animation-play-state:running;}
+.memory-bg-columns{position:absolute;inset:0;overflow:hidden;padding:0}
+/* Keep the collage narrow and to the right; it must not replace the original full-screen background. */
+.memory-bg-column{position:absolute;top:0;right:0;bottom:0;width:clamp(112px,32vw,156px);height:100%;overflow:hidden}
+.memory-bg-strip{display:flex;flex-direction:column;gap:0;will-change:transform;animation:memory-drift var(--memory-duration,48s) linear infinite;animation-delay:var(--memory-delay,0s);animation-play-state:running}
 .memory-bg-sequence{display:flex;flex-direction:column;gap:0;padding:0;box-sizing:border-box;width:100%}
-/* Keep the original vertical poster shape (the supplied photos are about 3:4).
-   Do not crop them into short horizontal tiles: each full poster is one background panel. */
+/* Preserve the full portrait poster (text, child and graduation artwork) without cropping or card frames. */
 .memory-photo{display:block;flex:0 0 auto;width:100%;height:auto;aspect-ratio:3 / 4;margin:0;padding:0;border:0;border-radius:0;overflow:hidden;background:transparent;box-shadow:none}
-.memory-photo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;opacity:.42;filter:none;}
-.memory-bg-bluewash,.memory-bg-dim{position:absolute;inset:0;pointer-events:none}
-/* Keep original photo colors; no blue tint and no cropping are applied. */
-.memory-bg-bluewash{background:transparent}
-.memory-bg-dim{background:rgba(7,13,28,.10)}
-:root[data-theme="dark"] .memory-bg-dim{background:rgba(4,8,18,.16)}
-:root[data-theme="light"] .memory-bg-dim{background:rgba(244,246,251,.12)}
+.memory-photo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;opacity:.34;filter:none}
+.memory-bg-bluewash,.memory-bg-dim{position:absolute;inset:0;pointer-events:none;background:transparent}
+/* Feather the strip into the original solid theme colour at its left edge and top/bottom. */
+.memory-bg-column::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(to right,var(--bg) 0%,color-mix(in srgb,var(--bg) 48%,transparent) 16%,transparent 45%),linear-gradient(to bottom,var(--bg) 0%,transparent 12%,transparent 88%,var(--bg) 100%)}
 @keyframes memory-drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(0,-50%,0)}}
-/* Reduced-motion settings slow the decorative movement instead of disabling the requested photo test. */
 @media(prefers-reduced-motion:reduce){.memory-bg-strip{animation-duration:90s!important}}
-/* Keep content in front while letting photos show softly through its surfaces. */
+/* Keep all existing app surfaces and layout above the decoration without changing their colors. */
 main#app,#fpanel{position:relative;z-index:1}
-.memory-bg-ready .top{background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
-.memory-bg-ready .search,.memory-bg-ready .iconbtn,.memory-bg-ready .fb{background-color:color-mix(in srgb,var(--card) 88%,transparent)}
-.memory-bg-ready .file,.memory-bg-ready .node{background-color:color-mix(in srgb,var(--card) 82%,transparent)}
 
 /* Header layout: minimal page tabs + theme toggle, with search and filters beneath. */
 .top{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 12px 5px;padding-top:calc(8px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
