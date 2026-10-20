@@ -1,6 +1,37 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-20T03:03:00.935Z",
-  "photos": [],
+  "generatedAt": "2026-10-20T03:32:16.481Z",
+  "photos": [
+    {
+      "name": "memory-01.png",
+      "relativePath": "memory-01.png",
+      "url": "/app/background/photos/memory-01.png",
+      "bytes": 303776
+    },
+    {
+      "name": "memory-02.png",
+      "relativePath": "memory-02.png",
+      "url": "/app/background/photos/memory-02.png",
+      "bytes": 291818
+    },
+    {
+      "name": "memory-03.png",
+      "relativePath": "memory-03.png",
+      "url": "/app/background/photos/memory-03.png",
+      "bytes": 299757
+    },
+    {
+      "name": "memory-04.png",
+      "relativePath": "memory-04.png",
+      "url": "/app/background/photos/memory-04.png",
+      "bytes": 295524
+    },
+    {
+      "name": "memory-05.png",
+      "relativePath": "memory-05.png",
+      "url": "/app/background/photos/memory-05.png",
+      "bytes": 292221
+    }
+  ],
   "music": []
 }
