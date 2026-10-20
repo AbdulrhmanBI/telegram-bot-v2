@@ -27,23 +27,22 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-/* Option D — moving ghost-image texture. The original theme background remains the base. */
+/* Option D — one wide, moving ghost-image column. Keep the original theme background unchanged. */
 .memory-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--bg);isolation:isolate}
 .memory-bg-columns{position:absolute;inset:0;overflow:hidden;padding:0}
-/* Multiple overlapping, soft-edged poster tracks make a low-contrast texture instead of a visible strip. */
-.memory-bg-column{position:absolute;top:0;bottom:0;left:var(--memory-left,0);width:var(--memory-width,clamp(170px,52vw,260px));height:100%;overflow:hidden;mask-image:linear-gradient(to right,transparent 0%,#000 16%,#000 84%,transparent 100%);-webkit-mask-image:linear-gradient(to right,transparent 0%,#000 16%,#000 84%,transparent 100%)}
-.memory-bg-strip{display:flex;flex-direction:column;gap:0;will-change:transform;animation:memory-drift var(--memory-duration,78s) linear infinite;animation-delay:var(--memory-delay,0s);animation-play-state:running}
-.memory-bg-column:nth-child(2) .memory-bg-strip{animation-direction:reverse}
+/* Exactly one broad track, anchored to the right; its left edge fades into the original background. */
+.memory-bg-column{position:absolute;top:0;right:0;left:auto;width:var(--memory-width,clamp(250px,74vw,420px));height:100%;overflow:hidden;mask-image:linear-gradient(to right,transparent 0%,#000 15%,#000 100%);-webkit-mask-image:linear-gradient(to right,transparent 0%,#000 15%,#000 100%)}
+.memory-bg-strip{display:flex;flex-direction:column;gap:0;will-change:transform;animation:memory-drift var(--memory-duration,96s) linear infinite;animation-delay:var(--memory-delay,0s);animation-play-state:running}
 .memory-bg-sequence{display:flex;flex-direction:column;gap:clamp(4px,1.2vw,8px);padding:0;box-sizing:border-box;width:100%}
-/* Keep each complete 3:4 poster, but monochrome, darkened and blended into the theme colour. */
+/* Show each complete 3:4 poster as a subtle monochrome ghost tinted toward the theme. */
 .memory-photo{display:block;flex:0 0 auto;width:100%;height:auto;aspect-ratio:3 / 4;margin:0;padding:0;border:0;border-radius:0;overflow:hidden;background:transparent;box-shadow:none}
-.memory-photo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;opacity:.105;filter:grayscale(1) sepia(.55) hue-rotate(168deg) saturate(.65) brightness(.38) contrast(.72);mix-blend-mode:screen}
-:root[data-theme="light"] .memory-photo img{opacity:.065;filter:grayscale(1) sepia(.16) hue-rotate(170deg) saturate(.35) brightness(.52) contrast(.7);mix-blend-mode:multiply}
+.memory-photo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;opacity:.09;filter:grayscale(1) sepia(.55) hue-rotate(168deg) saturate(.65) brightness(.38) contrast(.72);mix-blend-mode:screen}
+:root[data-theme="light"] .memory-photo img{opacity:.052;filter:grayscale(1) sepia(.16) hue-rotate(170deg) saturate(.35) brightness(.52) contrast(.7);mix-blend-mode:multiply}
 .memory-bg-bluewash,.memory-bg-dim{position:absolute;inset:0;pointer-events:none;background:transparent}
-/* Fade each moving layer gently at the viewport edges so the images read as atmosphere, not cards. */
-.memory-bg-column::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,var(--bg) 0%,transparent 21%,transparent 78%,var(--bg) 100%)}
+/* Soft vertical fade keeps the moving image texture from competing with the interface. */
+.memory-bg-column::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,var(--bg) 0%,transparent 18%,transparent 82%,var(--bg) 100%)}
 @keyframes memory-drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(0,-50%,0)}}
-@media(prefers-reduced-motion:reduce){.memory-bg-strip{animation-duration:120s!important}}
+@media(prefers-reduced-motion:reduce){.memory-bg-strip{animation-duration:140s!important}}
 /* Keep all existing app surfaces and layout above the decoration without changing their colors. */
 main#app,#fpanel{position:relative;z-index:1}
 
@@ -402,20 +401,16 @@ function renderMemoryBackground(items){
   const host = $("memoryBackgroundColumns");
   if(!host || !urls.length) return;
   memoryImages = urls;
-  // Keep at least five full portrait posters per track so the motion loops smoothly on phones.
-  const positions = ["-13%","24%","61%"];
-  const tracks = positions.map((left,index)=>{
-    const order = shuffleMemoryList(urls);
-    const sequenceUrls = order.slice();
-    while(sequenceUrls.length < 5) sequenceUrls.push(order[sequenceUrls.length % order.length]);
-    const sequence = sequenceUrls.map(url=>`<figure class="memory-photo"><img src="${esc(url)}" alt="" loading="eager" decoding="async" draggable="false" referrerpolicy="no-referrer"></figure>`).join("");
-    const baseDuration = Number(memoryConfig.scrollDurationSeconds)||78;
-    const duration = Math.round(baseDuration * (0.94 + Math.random()*0.14) * (index===2 ? 1.13 : 1));
-    const delay = -Math.round(Math.random()*duration);
-    const width = "clamp(170px,52vw,260px)";
-    return `<div class="memory-bg-column" style="--memory-left:${left};--memory-width:${width}"><div class="memory-bg-strip" style="--memory-duration:${duration}s;--memory-delay:${delay}s"><div class="memory-bg-sequence">${sequence}</div><div class="memory-bg-sequence">${sequence}</div></div></div>`;
-  }).join("");
-  host.innerHTML = tracks;
+  // One wide portrait track only. Duplicate the same sequence to make the upward loop seamless.
+  const order = shuffleMemoryList(urls);
+  const sequenceUrls = order.slice();
+  while(sequenceUrls.length < 5) sequenceUrls.push(order[sequenceUrls.length % order.length]);
+  const sequence = sequenceUrls.map(url=>`<figure class="memory-photo"><img src="${esc(url)}" alt="" loading="eager" decoding="async" draggable="false" referrerpolicy="no-referrer"></figure>`).join("");
+  const configuredDuration = Number(memoryConfig.scrollDurationSeconds)||96;
+  const duration = Math.round(configuredDuration * (0.96 + Math.random()*0.08));
+  const delay = -Math.round(Math.random()*duration);
+  const width = "clamp(250px,74vw,420px)";
+  host.innerHTML = `<div class="memory-bg-column" style="--memory-width:${width}"><div class="memory-bg-strip" style="--memory-duration:${duration}s;--memory-delay:${delay}s"><div class="memory-bg-sequence">${sequence}</div><div class="memory-bg-sequence">${sequence}</div></div></div>`;
   document.body.classList.add("memory-bg-ready");
 }
 function setMusicButtonState(state){
