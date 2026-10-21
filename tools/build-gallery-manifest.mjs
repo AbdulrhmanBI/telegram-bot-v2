@@ -1,84 +1,44 @@
 #!/usr/bin/env node
-/**
- * Build a static manifest for the scrolling-memory background.
- * Runs in Cloudflare Workers Builds before `wrangler deploy`.
- * No external APIs, secrets, npm dependencies, or manual per-file manifest edits.
- */
-import { readdir, stat, mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+// Writes public/app/background/photos.json: the list of photos and music the Mini App background should use.
+// The app reads this small static file instead of calling the GitHub API, so there is no API rate limit and no extra request.
+//
+//   node tools/build-gallery-manifest.mjs            write the file
+//   node tools/build-gallery-manifest.mjs --check    exit 1 if the file is out of date (for CI)
+//
+// Run from the project root (the folder that contains public/). Uses the same filters as the app: formats, maxImageBytes, maxAudioBytes, maxPhotos.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { normalizeConfig, pickFromEntries } from "../public/app/background/gallery.js";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PUBLIC_DIR = path.join(ROOT, 'public');
-const PHOTOS_DIR = path.join(PUBLIC_DIR, 'app', 'background', 'photos');
-const MUSIC_DIR = path.join(PUBLIC_DIR, 'app', 'background', 'music');
-const MANIFEST_PATH = path.join(PUBLIC_DIR, 'app', 'background', 'gallery-manifest.json');
-const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif']);
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.webm']);
-// Cloudflare Workers Static Assets allow individual assets up to 25 MiB.
-// Keep media below 20 MiB to leave a safety margin and avoid unexpectedly heavy uploads.
-const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BG = path.join(ROOT, "public/app/background");
+const raw = JSON.parse(fs.readFileSync(path.join(BG, "gallery-config.json"), "utf8"));
+const cfg = { ...normalizeConfig(raw), projectPath: "" };                    // locally the project root IS the root
+const name = cfg.manifest || "photos.json";
 
-async function ensureDirectory(directory) {
-  await mkdir(directory, { recursive: true });
-}
-
-async function listMedia(directory, allowedExtensions, publicPrefix) {
-  const output = [];
-  async function walk(currentDirectory) {
-    let entries;
-    try {
-      entries = await readdir(currentDirectory, { withFileTypes: true });
-    } catch (error) {
-      if (error?.code === 'ENOENT') return;
-      throw error;
-    }
-    entries.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
-    for (const entry of entries) {
-      // Ignore Git placeholders and hidden operating-system files.
-      if (entry.name.startsWith('.')) continue;
-      const absolute = path.join(currentDirectory, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) {
-        await walk(absolute);
-        continue;
-      }
-      if (!entry.isFile() || !allowedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
-
-      const info = await stat(absolute);
-      if (info.size <= 0 || info.size > MAX_MEDIA_BYTES) {
-        console.warn(`[gallery] Skipped ${path.relative(ROOT, absolute)} (${info.size} bytes; allowed range is 1 byte–20 MiB).`);
-        continue;
-      }
-
-      const relativePath = path.relative(directory, absolute).split(path.sep).join('/');
-      const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
-      output.push({
-        name: path.basename(relativePath),
-        relativePath,
-        url: `${publicPrefix}/${encodedPath}`,
-        bytes: info.size,
-      });
-    }
+function walk(dir, base, out) {
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, e.name), rel = base + "/" + e.name;
+    if (e.isDirectory()) walk(abs, rel, out);
+    else if (e.isFile()) out.push({ path: rel, type: "blob", size: fs.statSync(abs).size });
   }
-  await walk(directory);
-  output.sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'en', { sensitivity: 'base' }));
-  return output;
+  return out;
 }
+const entries = [
+  ...walk(path.join(ROOT, cfg.photosFolder), cfg.photosFolder, []),
+  ...walk(path.join(ROOT, cfg.musicFolder), cfg.musicFolder, [])
+];
+const { photos, music } = pickFromEntries(entries, cfg);
+const strip = (list, folder) => list.map((p) => p.slice(folder.length + 1));
+const json = JSON.stringify({ v: 1, photos: strip(photos, cfg.photosFolder), music: strip(music, cfg.musicFolder) }) + "\n";
+const out = path.join(BG, name);
 
-await Promise.all([ensureDirectory(PHOTOS_DIR), ensureDirectory(MUSIC_DIR)]);
-const [photos, music] = await Promise.all([
-  listMedia(PHOTOS_DIR, IMAGE_EXTENSIONS, '/app/background/photos'),
-  listMedia(MUSIC_DIR, AUDIO_EXTENSIONS, '/app/background/music'),
-]);
-
-const manifest = {
-  version: 1,
-  generatedAt: new Date().toISOString(),
-  photos,
-  music,
-};
-await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-console.log(`[gallery] Wrote ${path.relative(ROOT, MANIFEST_PATH)}: ${photos.length} photo(s), ${music.length} audio file(s).`);
-if (!photos.length) console.log('[gallery] No photos found; the Mini App will show its bundled demo background until photos are added.');
-if (!music.length) console.log('[gallery] No music found; background music stays optional and the music button will be inactive.');
+if (process.argv.includes("--check")) {
+  const cur = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
+  if (cur !== json) { console.error(`${path.relative(ROOT, out)} is out of date — run: node tools/build-gallery-manifest.mjs`); process.exit(1); }
+  console.log("manifest is up to date"); process.exit(0);
+}
+fs.writeFileSync(out, json);
+console.log(`${path.relative(ROOT, out)}: ${photos.length} photos, ${music.length} music file(s)`);
