@@ -15,9 +15,9 @@
   "maxPhotos": 3000,
   "maxImageBytes": 1500000,
   "tileAspect": 0.75,
-  "ghostOpacity": 0.07,
+  "backgroundOpacity": 0.91,
   "cardOpacity": 1,
-  "tintOpacity": 0.05,
+  "tintOpacity": 0,
 
   "musicFile": "",
   "musicVolume": 0.18,
