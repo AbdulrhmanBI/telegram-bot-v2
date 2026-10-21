@@ -15,7 +15,7 @@
   "maxPhotos": 3000,
   "maxImageBytes": 1500000,
   "tileAspect": 0.75,
-  "backgroundOpacity": 0.20,
+  "backgroundOpacity": 0.99,
   "cardOpacity": 1,
   "tintOpacity": 0,
 
