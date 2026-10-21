@@ -1,8 +1,8 @@
 {
   "enabled": true,
 
-  "owner": "",
-  "repo": "",
+  "owner": "AbdulrhmanBI",
+  "repo": "telegram-bot-v2"
   "branch": "main",
   "projectPath": "",
   "photosFolder": "public/app/background/photos",
