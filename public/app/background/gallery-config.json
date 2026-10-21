@@ -1,18 +1,22 @@
 {
   "enabled": true,
-  "owner": "AbdulrhmanBI",
-  "repo": "telegram-bot-v2",
+
+  "owner": "",
+  "repo": "",
   "branch": "main",
   "projectPath": "",
   "photosFolder": "public/app/background/photos",
   "musicFolder": "public/app/background/music",
+
   "manifest": "photos.json",
   "cacheTtlMinutes": 5,
   "mediaHost": "raw",
+
   "scrollDurationSeconds": 40,
   "maxPhotos": 3000,
   "maxImageBytes": 1500000,
   "tintOpacity": 0.34,
+
   "musicFile": "",
   "musicVolume": 0.18,
   "maxAudioBytes": 25000000,
