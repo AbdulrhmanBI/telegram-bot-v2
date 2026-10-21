@@ -1,0 +1,30 @@
+# Keeps public/app/background/photos.json in sync whenever photos or music are added / removed in the repository.
+# If this project lives in a sub-folder of the repo, move this file to <repo root>/.github/workflows/ and set PROJECT_DIR.
+name: gallery-manifest
+on:
+  push:
+    paths:
+      - "**/public/app/background/photos/**"
+      - "**/public/app/background/music/**"
+      - "**/public/app/background/gallery-config.json"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+env:
+  PROJECT_DIR: "."          # e.g. "apps/telegram-bot-main" when nested
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build photos.json
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: node tools/build-gallery-manifest.mjs
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A "${PROJECT_DIR}/public/app/background/photos.json"
+          git diff --cached --quiet || (git commit -m "Update gallery manifest" && git push)
