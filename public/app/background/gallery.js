@@ -28,7 +28,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxPhotos: 3000,
   maxImageBytes: 1500000,
   tileAspect: 0.75,                                  // width / height of every tile (0.75 = portrait 3:4). Photos are shown whole, never cropped
-  ghostOpacity: 0.16,                                // how visible the photos are (0.03 = almost invisible, 0.6 = strong). They are always grey
+  ghostOpacity: 0.09,                                // how visible the photos are (0.03 = almost invisible, 0.6 = strong). They are always grey
+  cardOpacity: 1,                                    // how solid the app's cards / buttons / header are (1 = exactly as before, lower = glassy)
   tintOpacity: 0,                                    // optional Royal Blue (#1D4ED8) veil, 0 = none
   musicFile: "",
   musicVolume: 0.18,
@@ -58,6 +59,7 @@ export function normalizeConfig(raw) {
     maxImageBytes: num(r.maxImageBytes, d.maxImageBytes, 10000, 50e6),
     tileAspect: num(r.tileAspect, d.tileAspect, 0.3, 3),
     ghostOpacity: num(r.ghostOpacity, d.ghostOpacity, 0.03, 0.6),
+    cardOpacity: num(r.cardOpacity, d.cardOpacity, 0.15, 1),
     tintOpacity: num(r.tintOpacity, d.tintOpacity, 0, 0.9),
     musicFile: str(r.musicFile),
     musicVolume: num(r.musicVolume, d.musicVolume, 0, 1),
@@ -299,7 +301,8 @@ export async function startBackground(opts = {}) {
   layer.style.setProperty("--bg-ghost", String(cfg.ghostOpacity));
   const grid = doc.createElement("div"); grid.className = "bg-grid";
   const tint = doc.createElement("div"); tint.className = "bg-tint";
-  layer.append(grid, tint);
+  const color = doc.createElement("div"); color.className = "bg-color";            // gives the photos the app's own hue (see gallery.css)
+  layer.append(grid, color, tint);
   doc.body.insertBefore(layer, doc.body.firstChild);
   ctl.layer = layer;
 
@@ -340,6 +343,8 @@ export async function startBackground(opts = {}) {
   };
   render();
   root.classList.add("has-bg");
+  root.style.setProperty("--glass", Math.round(cfg.cardOpacity * 100) + "%");
+  root.style.setProperty("--glass-top", Math.min(100, Math.round(cfg.cardOpacity * 100) + 15) + "%");
   const raf = win.requestAnimationFrame ? win.requestAnimationFrame.bind(win) : (f) => setTimeout(f, 16);
   raf(() => layer.classList.add("ready"));
 
@@ -360,7 +365,7 @@ export async function startBackground(opts = {}) {
   ctl.destroy = () => {
     ctl.destroyed = true; cleanups.forEach((f) => { try { f(); } catch (_) {} });
     if (ctl.audio) { try { ctl.audio.pause(); } catch (_) {} }
-    layer.remove(); root.classList.remove("has-bg");
+    layer.remove(); root.classList.remove("has-bg"); root.style.removeProperty("--glass"); root.style.removeProperty("--glass-top");
   };
   return ctl;
 }

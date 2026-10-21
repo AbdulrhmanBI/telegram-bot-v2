@@ -8,16 +8,17 @@
 }
 .bg-layer.ready{opacity:1}
 
-/* The photos are a GHOST: grey (no colour details) and faint, over the app's own background colour.
-   Faces and shapes are still there if you look at them. */
+/* The photos are painted INTO the app's own background colour: same hue, only a faint difference in lightness.
+   (.bg-color is the app's background colour set to blend mode "color": it keeps the photo's light/dark pattern but replaces its colours.)
+   Faces and shapes stay visible if you look at them, colour details never are. */
 .bg-grid{
   position:absolute; inset:0; display:flex; gap:8px;
-  opacity:var(--bg-ghost,.16);
-  filter:grayscale(1) contrast(1.1);
+  opacity:var(--bg-ghost,.09);
 }
-:root[data-theme="dark"] .bg-grid{opacity:calc(var(--bg-ghost,.16) * .85)}
+.bg-color{position:absolute; inset:0; background:var(--bg); mix-blend-mode:color}
+:root[data-theme="dark"] .bg-grid{opacity:calc(var(--bg-ghost,.09) * .85)}
 @media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]) .bg-grid{opacity:calc(var(--bg-ghost,.16) * .85)}
+  :root:not([data-theme="light"]) .bg-grid{opacity:calc(var(--bg-ghost,.09) * .85)}
 }
 .bg-col{flex:1 1 0; min-width:0; height:100%; overflow:hidden; position:relative}
 
@@ -33,7 +34,6 @@
 .bg-tile{
   display:block; width:100%; height:auto; margin:0 0 8px;
   object-fit:contain; border-radius:10px;          /* the whole photo is always visible (tile shape = tileAspect) */
-  background:rgba(128,128,128,.25);
   -webkit-user-drag:none; pointer-events:none;
 }
 .bg-tile.bad{opacity:0}                      /* missing / broken image: keeps its size, shows nothing */
@@ -51,19 +51,23 @@ html.has-bg,
 html.has-bg body{background:transparent}
 html.has-bg{background-color:var(--bg)}      /* fallback color only paints behind the layer, never over it */
 
-/* header and cards: very slightly translucent, only while the background is on */
+/* Cards, buttons, search box and header become "glass": the app's own colour at --glass opacity (gallery-config.json: cardOpacity),
+   so the ghost photos show through and the controls feel part of the background instead of solid slabs on top of it.
+   Selected / active states keep their own highlight colour (the :not() parts). Pop-ups and sheets stay solid. */
 html.has-bg .top{
-  background:color-mix(in srgb,var(--bg) 86%,transparent);
+  background:color-mix(in srgb,var(--bg) var(--glass-top,100%),transparent);
   -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
 }
 html.has-bg .node,
-html.has-bg .file,
-html.has-bg .fb,
+html.has-bg .file:not([aria-pressed="true"]),
+html.has-bg .fb:not(.on),
+html.has-bg .iconbtn:not(.on),
+html.has-bg .search,
 html.has-bg .note,
 html.has-bg .url,
 html.has-bg .citem,
 html.has-bg .demo-page{
-  background:color-mix(in srgb,var(--card) 90%,transparent);
+  background:color-mix(in srgb,var(--card) var(--glass,100%),transparent);
 }
 
 /* music button: same look as the theme toggle (.iconbtn) */
