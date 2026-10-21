@@ -8,9 +8,16 @@
 }
 .bg-layer.ready{opacity:1}
 
+/* The photos are a GHOST: grey (no colour details) and faint, over the app's own background colour.
+   Faces and shapes are still there if you look at them. */
 .bg-grid{
   position:absolute; inset:0; display:flex; gap:8px;
-  /* a little larger than the screen so rotated/offset tiles never show an edge */
+  opacity:var(--bg-ghost,.16);
+  filter:grayscale(1) contrast(1.1);
+}
+:root[data-theme="dark"] .bg-grid{opacity:calc(var(--bg-ghost,.16) * .85)}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .bg-grid{opacity:calc(var(--bg-ghost,.16) * .85)}
 }
 .bg-col{flex:1 1 0; min-width:0; height:100%; overflow:hidden; position:relative}
 
@@ -25,8 +32,8 @@
 /* every tile carries its own bottom margin, so the two halves of a track are exactly the same height -> seamless at -50% */
 .bg-tile{
   display:block; width:100%; height:auto; margin:0 0 8px;
-  object-fit:cover; border-radius:12px;
-  background:rgba(120,140,180,.22);
+  object-fit:contain; border-radius:10px;          /* the whole photo is always visible (tile shape = tileAspect) */
+  background:rgba(128,128,128,.25);
   -webkit-user-drag:none; pointer-events:none;
 }
 .bg-tile.bad{opacity:0}                      /* missing / broken image: keeps its size, shows nothing */
@@ -36,13 +43,8 @@
   to{transform:translate3d(0,-50%,0)}
 }
 
-/* Royal Blue tint + a theme-aware softening layer so text stays readable on top */
-.bg-tint{position:absolute; inset:0; background:rgba(29,78,216,var(--bg-tint,.34)); mix-blend-mode:normal}
-.bg-dim{position:absolute; inset:0; background:rgba(246,248,253,.72)}
-:root[data-theme="dark"] .bg-dim{background:rgba(7,10,18,.74)}
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]) .bg-dim{background:rgba(7,10,18,.74)}
-}
+/* optional Royal Blue veil (tintOpacity in gallery-config.json, 0 = off) */
+.bg-tint{position:absolute; inset:0; background:rgba(29,78,216,var(--bg-tint,0))}
 
 /* The page itself must be see-through for the fixed layer (z-index:-1) to show behind it. */
 html.has-bg,

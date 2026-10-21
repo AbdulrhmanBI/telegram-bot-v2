@@ -27,7 +27,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   scrollDurationSeconds: 40,                         // seconds a column needs to move by ONE screen height (bigger = slower)
   maxPhotos: 3000,
   maxImageBytes: 1500000,
-  tintOpacity: 0.34,
+  tileAspect: 0.75,                                  // width / height of every tile (0.75 = portrait 3:4). Photos are shown whole, never cropped
+  ghostOpacity: 0.16,                                // how visible the photos are (0.03 = almost invisible, 0.6 = strong). They are always grey
+  tintOpacity: 0,                                    // optional Royal Blue (#1D4ED8) veil, 0 = none
   musicFile: "",
   musicVolume: 0.18,
   maxAudioBytes: 25000000,
@@ -54,6 +56,8 @@ export function normalizeConfig(raw) {
     scrollDurationSeconds: num(r.scrollDurationSeconds, d.scrollDurationSeconds, 5, 3600),
     maxPhotos: Math.floor(num(r.maxPhotos, d.maxPhotos, 1, 20000)),
     maxImageBytes: num(r.maxImageBytes, d.maxImageBytes, 10000, 50e6),
+    tileAspect: num(r.tileAspect, d.tileAspect, 0.3, 3),
+    ghostOpacity: num(r.ghostOpacity, d.ghostOpacity, 0.03, 0.6),
     tintOpacity: num(r.tintOpacity, d.tintOpacity, 0, 0.9),
     musicFile: str(r.musicFile),
     musicVolume: num(r.musicVolume, d.musicVolume, 0, 1),
@@ -225,16 +229,14 @@ export function splitColumns(list, cols) {
   list.forEach((x, i) => out[i % cols].push(x));
   return out;
 }
-const ASPECTS = [4 / 3, 1, 3 / 4, 4 / 3, 5 / 4];            // a little variety; the same sequence in both halves of a track
 const GAP = 8;
 
 // Plans one column: which items (cycled until they cover the screen), the aspect of each tile, the loop length in px.
-export function planColumn(items, colW, viewH, colIndex) {
+export function planColumn(items, colW, viewH, colIndex, ar = 0.75) {
   const need = Math.max(viewH * 1.3, 200);
   const seq = []; let h = 0, k = 0;
   const src = items.length ? items : [null];
   while ((h < need || k < src.length) && k < 4000) {              // every item once at least; repeated only to fill the screen
-    const ar = ASPECTS[(colIndex * 3 + k) % ASPECTS.length];
     seq.push({ item: src[k % src.length], ar });
     h += colW / ar + GAP; k++;
   }
@@ -294,10 +296,10 @@ export async function startBackground(opts = {}) {
   const layer = doc.createElement("div");
   layer.id = "bgLayer"; layer.className = "bg-layer"; layer.setAttribute("aria-hidden", "true");
   layer.style.setProperty("--bg-tint", String(cfg.tintOpacity));
+  layer.style.setProperty("--bg-ghost", String(cfg.ghostOpacity));
   const grid = doc.createElement("div"); grid.className = "bg-grid";
   const tint = doc.createElement("div"); tint.className = "bg-tint";
-  const dim = doc.createElement("div"); dim.className = "bg-dim";
-  layer.append(grid, tint, dim);
+  layer.append(grid, tint);
   doc.body.insertBefore(layer, doc.body.firstChild);
   ctl.layer = layer;
 
@@ -313,7 +315,7 @@ export async function startBackground(opts = {}) {
     grid.style.setProperty("--bg-cols", String(cols));
     const frag = doc.createDocumentFragment();
     columns.forEach((items, ci) => {
-      const { seq, halfPx } = planColumn(items, colW, vh, ci);
+      const { seq, halfPx } = planColumn(items, colW, vh, ci, cfg.tileAspect);
       const col = doc.createElement("div"); col.className = "bg-col";
       const track = doc.createElement("div"); track.className = "bg-track";
       const mk = (s) => {

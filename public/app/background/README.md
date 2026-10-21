@@ -26,7 +26,9 @@ Edit `gallery-config.json`:
 | `scrollDurationSeconds` | seconds a column needs to move by **one screen height**. Bigger = slower | `40` |
 | `maxPhotos` | never use more than this many | `3000` |
 | `maxImageBytes` | larger images are ignored | `1500000` |
-| `tintOpacity` | Royal Blue (#1D4ED8) tint strength, 0–0.9 | `0.34` |
+| `tileAspect` | width ÷ height of each tile. Photos are shown **whole** (never cropped): set it to your photos' shape (portrait 3:4 = `0.75`, landscape 4:3 = `1.333`) | `0.75` |
+| `ghostOpacity` | how visible the photos are: grey and faint over the app's own background colour (0.03 = almost invisible … 0.6 = strong) | `0.16` |
+| `tintOpacity` | optional Royal Blue (#1D4ED8) veil, 0 = none | `0` |
 | `musicFile` | exact music file name; empty = first file alphabetically | `""` |
 | `musicVolume` | 0–1 | `0.18` |
 | `autoplayMusic` | try to start music on launch | `true` |

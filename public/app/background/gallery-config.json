@@ -15,7 +15,9 @@
   "scrollDurationSeconds": 40,
   "maxPhotos": 3000,
   "maxImageBytes": 1500000,
-  "tintOpacity": 0.34,
+  "tileAspect": 0.75,
+  "ghostOpacity": 0.16,
+  "tintOpacity": 0,
 
   "musicFile": "",
   "musicVolume": 0.18,
