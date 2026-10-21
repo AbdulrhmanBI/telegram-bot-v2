@@ -6,15 +6,19 @@
   "projectPath": "",
   "photosFolder": "public/app/background/photos",
   "musicFolder": "public/app/background/music",
+
   "manifest": "photos.json",
   "cacheTtlMinutes": 5,
   "mediaHost": "raw",
+
   "scrollDurationSeconds": 40,
   "maxPhotos": 3000,
   "maxImageBytes": 1500000,
   "tileAspect": 0.75,
-  "ghostOpacity": 0.06,
-  "tintOpacity": 0.10,
+  "ghostOpacity": 0.07,
+  "cardOpacity": 1,
+  "tintOpacity": 0,
+
   "musicFile": "",
   "musicVolume": 0.18,
   "maxAudioBytes": 25000000,
