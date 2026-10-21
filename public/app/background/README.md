@@ -27,7 +27,7 @@ Edit `gallery-config.json`:
 | `maxPhotos` | never use more than this many | `3000` |
 | `maxImageBytes` | larger images are ignored | `1500000` |
 | `tileAspect` | width ÷ height of each tile. Photos are shown **whole** (never cropped): set it to your photos' shape (portrait 3:4 = `0.75`, landscape 4:3 = `1.333`) | `0.75` |
-| `ghostOpacity` | how visible the photos are: faint and painted in the app’s own background colour (tone-on-tone, no photo colours) (0.03 = almost invisible … 0.6 = strong) | `0.09` |
+| `backgroundOpacity` | **opacity of the background colour** over the photos. `1` = plain colour (photos invisible), lower = photos show more. Range 0.4 – 0.97; try `0.95` (very faint), `0.91` (default), `0.85` (clear) | `0.91` |
 | `cardOpacity` | how solid the cards, buttons, search box and header are over the background: `1` = solid, exactly as the app was (default), `0.45` = glassy, `0.15` = almost transparent | `1` |
 | `tintOpacity` | optional Royal Blue (#1D4ED8) veil, 0 = none | `0` |
 | `musicFile` | exact music file name; empty = first file alphabetically | `""` |
@@ -35,6 +35,9 @@ Edit `gallery-config.json`:
 | `autoplayMusic` | try to start music on launch | `true` |
 | `startMusicOnFirstTap` | if autoplay is blocked, start on the first tap | `true` |
 | `enabled` | `false` turns the whole feature off | `true` |
+
+**Try values without editing anything:** open the Mini App with `?bgopacity=0.85` at the end of its URL (e.g. `https://your-site/app/?bgopacity=0.85`). It is only a preview, nothing is saved.
+When you like it, put the number in `backgroundOpacity`.
 
 ## 2. Adding photos
 

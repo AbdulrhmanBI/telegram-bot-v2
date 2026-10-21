@@ -28,7 +28,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxPhotos: 3000,
   maxImageBytes: 1500000,
   tileAspect: 0.75,                                  // width / height of every tile (0.75 = portrait 3:4). Photos are shown whole, never cropped
-  ghostOpacity: 0.09,                                // how visible the photos are (0.03 = almost invisible, 0.6 = strong). They are always grey
+  backgroundOpacity: 0.91,                           // opacity of the background COLOUR over the photos: 1 = plain colour, no photos; lower = photos show more (0.4 … 0.97)
   cardOpacity: 1,                                    // how solid the app's cards / buttons / header are (1 = exactly as before, lower = glassy)
   tintOpacity: 0,                                    // optional Royal Blue (#1D4ED8) veil, 0 = none
   musicFile: "",
@@ -41,6 +41,9 @@ export const DEFAULT_CONFIG = Object.freeze({
 const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
 const str = (v, d = "") => (typeof v === "string" ? v.trim() : d);
 const cleanPath = (p) => str(p).replace(/\\/g, "/").split("/").filter((x) => x && x !== "." && x !== "..").join("/");
+
+// backgroundOpacity is the setting. (ghostOpacity = how visible the photos are = 1 - backgroundOpacity; still understood if an older config has it.)
+const bgOpacity = (r) => num(r.backgroundOpacity !== undefined ? r.backgroundOpacity : r.ghostOpacity !== undefined ? 1 - Number(r.ghostOpacity) : undefined, DEFAULT_CONFIG.backgroundOpacity, 0.4, 0.97);
 
 export function normalizeConfig(raw) {
   const r = raw && typeof raw === "object" ? raw : {};
@@ -58,7 +61,7 @@ export function normalizeConfig(raw) {
     maxPhotos: Math.floor(num(r.maxPhotos, d.maxPhotos, 1, 20000)),
     maxImageBytes: num(r.maxImageBytes, d.maxImageBytes, 10000, 50e6),
     tileAspect: num(r.tileAspect, d.tileAspect, 0.3, 3),
-    ghostOpacity: num(r.ghostOpacity, d.ghostOpacity, 0.03, 0.6),
+    backgroundOpacity: bgOpacity(r),
     cardOpacity: num(r.cardOpacity, d.cardOpacity, 0.15, 1),
     tintOpacity: num(r.tintOpacity, d.tintOpacity, 0, 0.9),
     musicFile: str(r.musicFile),
@@ -278,6 +281,10 @@ export async function startBackground(opts = {}) {
     } catch (_) { rawCfg = {}; }
   }
   const cfg = normalizeConfig(rawCfg);
+  try {                                                                       // preview without editing files: open the app with  ?bgopacity=0.85  (not saved)
+    const q = new URLSearchParams(opts.search !== undefined ? opts.search : win.location.search).get("bgopacity");
+    if (q !== null && q !== "" && Number.isFinite(Number(q))) cfg.backgroundOpacity = bgOpacity({ backgroundOpacity: Number(q) });
+  } catch (_) {}
   if (!cfg.enabled) { const b = doc.getElementById("musicBtn"); if (b) b.hidden = true; return null; }
 
   const root = doc.documentElement;
@@ -298,7 +305,7 @@ export async function startBackground(opts = {}) {
   const layer = doc.createElement("div");
   layer.id = "bgLayer"; layer.className = "bg-layer"; layer.setAttribute("aria-hidden", "true");
   layer.style.setProperty("--bg-tint", String(cfg.tintOpacity));
-  layer.style.setProperty("--bg-ghost", String(cfg.ghostOpacity));
+  layer.style.setProperty("--bg-ghost", String(+(1 - cfg.backgroundOpacity).toFixed(3)));
   const grid = doc.createElement("div"); grid.className = "bg-grid";
   const tint = doc.createElement("div"); tint.className = "bg-tint";
   const color = doc.createElement("div"); color.className = "bg-color";            // gives the photos the app's own hue (see gallery.css)
