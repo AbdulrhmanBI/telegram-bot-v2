@@ -14,7 +14,7 @@
   "maxImageBytes": 1500000,
   "tileAspect": 0.75,
   "ghostOpacity": 0.06,
-  "tintOpacity": 0.25,
+  "tintOpacity": 0.10,
   "musicFile": "",
   "musicVolume": 0.18,
   "maxAudioBytes": 25000000,
