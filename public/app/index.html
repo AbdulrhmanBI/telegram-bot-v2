@@ -27,33 +27,10 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-/* Option D — one wide, centered, moving ghost-image column. Keep the original theme background unchanged. */
-.memory-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--bg);isolation:isolate}
-.memory-bg-columns{position:absolute;inset:0;overflow:hidden;padding:0}
-/* Exactly one broad track, centered; its edges fade into the original background. */
-.memory-bg-column{position:absolute;top:0;left:50%;right:auto;transform:translateX(-50%);width:var(--memory-width,clamp(250px,74vw,420px));height:100%;overflow:hidden;mask-image:linear-gradient(to right,transparent 0%,#000 15%,#000 100%);-webkit-mask-image:linear-gradient(to right,transparent 0%,#000 15%,#000 100%)}
-.memory-bg-strip{display:flex;flex-direction:column;gap:0;will-change:transform;animation:memory-drift var(--memory-duration,82s) linear infinite;animation-delay:var(--memory-delay,0s);animation-play-state:running}
-.memory-bg-sequence{display:flex;flex-direction:column;gap:clamp(4px,1.2vw,8px);padding:0;box-sizing:border-box;width:100%}
-/* Show each complete 3:4 poster as a subtle monochrome ghost tinted toward the theme. */
-.memory-photo{display:block;flex:0 0 auto;width:100%;height:auto;aspect-ratio:3 / 4;margin:0;padding:0;border:0;border-radius:0;overflow:hidden;background:transparent;box-shadow:none}
-.memory-photo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;opacity:.09;filter:grayscale(1) sepia(.55) hue-rotate(168deg) saturate(.65) brightness(.38) contrast(.72);mix-blend-mode:screen}
-:root[data-theme="light"] .memory-photo img{opacity:.052;filter:grayscale(1) sepia(.16) hue-rotate(170deg) saturate(.35) brightness(.52) contrast(.7);mix-blend-mode:multiply}
-.memory-bg-bluewash,.memory-bg-dim{position:absolute;inset:0;pointer-events:none;background:transparent}
-/* Soft vertical fade keeps the moving image texture from competing with the interface. */
-.memory-bg-column::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,var(--bg) 0%,transparent 18%,transparent 82%,var(--bg) 100%)}
-@keyframes memory-drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(0,-50%,0)}}
-@media(prefers-reduced-motion:reduce){.memory-bg-strip{animation-duration:92s!important}}
-/* Keep all existing app surfaces and layout above the decoration without changing their colors. */
-main#app,#fpanel{position:relative;z-index:1}
-
 /* Header layout: minimal page tabs + theme toggle, with search and filters beneath. */
 .top{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 12px 5px;padding-top:calc(8px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line)}
 .primary-nav{display:flex;align-items:center;gap:8px;min-width:0;border-bottom:1px solid var(--line)}
 #themeBtn,#musicBtn{width:38px;height:38px;align-self:center}
-#musicBtn{color:var(--muted)}
-:root[data-theme="dark"] #musicBtn{color:var(--accent)}
-#musicBtn[aria-pressed="true"]{background:var(--accent-soft)}
-.music-toggle-icon{width:19px;height:19px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .bar{display:flex;gap:8px;align-items:center;margin-top:6px}
 .bar.hidden,.crumbs.hidden,.fpanel.hidden{display:none !important}
 .search{font-size:16px;line-height:20px;height:36px;flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:0 11px;outline:none}
@@ -222,20 +199,16 @@ h2{margin:6px 0 2px;font-size:20px}
 /* footer signature */
 .zm-footer{position:fixed;left:0;right:0;bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:29;padding:4px 12px 6px;text-align:center;color:var(--muted);font-size:11px;opacity:.65;letter-spacing:.2px;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--bg) 35%)}
 </style>
+<link rel="stylesheet" href="./background/gallery.css?v=1">
 </head>
 <body>
-<div id="memoryBackground" class="memory-bg" aria-hidden="true">
-  <div id="memoryBackgroundColumns" class="memory-bg-columns"></div>
-  <div class="memory-bg-bluewash"></div>
-  <div class="memory-bg-dim"></div>
-</div>
 <header class="top">
   <div class="primary-nav">
     <nav id="tabs" class="tabs" role="tablist" aria-label="Main sections">
       <button id="libraryTab" class="tab" type="button" role="tab" aria-selected="true" aria-controls="app" data-tab="library"><svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16M8 7h8M8 11h8"/></svg><span>Library</span></button>
       <button id="exploreTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="app" data-tab="explore"><svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.7 8.3-2.4 5-5 2.4 2.4-5z"/></svg><span>Explore</span></button>
     </nav>
-    <button id="musicBtn" class="iconbtn" type="button" aria-label="Background music unavailable" title="Background music" aria-pressed="true"><svg class="music-toggle-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+    <button id="musicBtn" class="iconbtn" type="button" aria-label="Play background music" title="Play background music" hidden></button>
     <button id="themeBtn" class="iconbtn" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
   </div>
   <div id="searchBar" class="bar">
@@ -380,103 +353,6 @@ document.documentElement.lang = "en";
 document.documentElement.dir = "ltr";
 document.title = T("title");
 $("q").placeholder = T("search");
-
-/* ───────────── scrolling memories background + optional music ───────────── */
-const MEMORY_DEMO_PHOTOS = Array.from({length:8}, (_, i) => `/app/background/demo-photos/memory-${String(i+1).padStart(2,"0")}.svg`);
-const MEMORY_CONFIG_URL = "/app/background/gallery-config.json";
-const MEMORY_MANIFEST_URL = "/app/background/gallery-manifest.json";
-let memoryImages = MEMORY_DEMO_PHOTOS.slice();
-let memoryConfig = { musicFile:"", scrollDurationSeconds:82, blueOverlay:"" };
-let memoryMusicUrl = "";
-let memoryAudio = null;
-let memoryMusicStarted = false;
-let memoryAudioError = false;
-function shuffleMemoryList(items){
-  const a = items.slice();
-  for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
-  return a;
-}
-function renderMemoryBackground(items){
-  const urls = shuffleMemoryList((items||[]).filter(x=>typeof x==="string" && x));
-  const host = $("memoryBackgroundColumns");
-  if(!host || !urls.length) return;
-  memoryImages = urls;
-  // One wide portrait track only. Duplicate the same sequence to make the upward loop seamless.
-  const order = shuffleMemoryList(urls);
-  const sequenceUrls = order.slice();
-  while(sequenceUrls.length < 5) sequenceUrls.push(order[sequenceUrls.length % order.length]);
-  const sequence = sequenceUrls.map(url=>`<figure class="memory-photo"><img src="${esc(url)}" alt="" loading="eager" decoding="async" draggable="false" referrerpolicy="no-referrer"></figure>`).join("");
-  const configuredDuration = Number(memoryConfig.scrollDurationSeconds)||82;
-  const duration = Math.round(configuredDuration * (0.96 + Math.random()*0.08));
-  const delay = -Math.round(Math.random()*duration);
-  const width = "clamp(250px,74vw,420px)";
-  host.innerHTML = `<div class="memory-bg-column" style="--memory-width:${width}"><div class="memory-bg-strip" style="--memory-duration:${duration}s;--memory-delay:${delay}s"><div class="memory-bg-sequence">${sequence}</div><div class="memory-bg-sequence">${sequence}</div></div></div>`;
-  document.body.classList.add("memory-bg-ready");
-}
-function setMusicButtonState(state){
-  const btn=$("musicBtn"); if(!btn)return;
-  const iconOn='<svg class="music-toggle-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
-  const iconMuted='<svg class="music-toggle-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="m3 3 18 18"/></svg>';
-  const playing = state === "playing";
-  btn.innerHTML = playing ? iconOn : iconMuted;
-  btn.setAttribute("aria-pressed", String(!playing));
-  const label = playing ? "Mute background music" : (memoryMusicUrl ? "Play or unmute background music" : "Background music is not configured");
-  btn.setAttribute("aria-label",label); btn.title=label;
-  btn.disabled = !memoryMusicUrl;
-}
-async function startMemoryMusic(){
-  if(!memoryMusicUrl) return;
-  if(!memoryAudio){memoryAudio=new Audio(memoryMusicUrl);memoryAudio.loop=true;memoryAudio.preload="none";memoryAudio.volume=.18;memoryAudio.addEventListener("error",()=>{memoryAudioError=true;setMusicButtonState("muted");});}
-  try{
-    if(!memoryMusicStarted || memoryAudio.paused){memoryAudio.muted=false;await memoryAudio.play();memoryMusicStarted=true;setMusicButtonState("playing");}
-    else {memoryAudio.muted=!memoryAudio.muted;setMusicButtonState(memoryAudio.muted?"muted":"playing");if(!memoryAudio.muted)await memoryAudio.play();}
-  }catch(_){setMusicButtonState("muted");toast("Tap the music button again if playback was blocked by the browser.");}
-}
-$("musicBtn").addEventListener("click", startMemoryMusic);
-function normalizeMemoryAsset(entry){
-  if(typeof entry === "string") return {name:entry.split("/").pop()||entry,relativePath:entry.split("/").pop()||entry,url:entry};
-  if(!entry || typeof entry !== "object" || typeof entry.url !== "string") return null;
-  // The build script writes local same-origin paths; ignore malformed/external manifest entries.
-  if(!entry.url.startsWith("/app/background/photos/") && !entry.url.startsWith("/app/background/music/")) return null;
-  return {name:String(entry.name||entry.url.split("/").pop()),relativePath:String(entry.relativePath||entry.name||""),url:entry.url};
-}
-async function loadMemoryGalleryConfig(){
-  try{
-    const configResponse=await fetch(MEMORY_CONFIG_URL,{cache:"no-store"});
-    if(configResponse.ok) memoryConfig=Object.assign(memoryConfig,await configResponse.json());
-  }catch(_){}
-  let manifest={photos:[],music:[]};
-  try{
-    const response=await fetch(MEMORY_MANIFEST_URL,{cache:"no-store"});
-    if(response.ok) manifest=await response.json();
-  }catch(_){}
-  const photos=(Array.isArray(manifest.photos)?manifest.photos:[]).map(normalizeMemoryAsset).filter(x=>x && x.url.startsWith("/app/background/photos/")).map(x=>x.url);
-  const tracks=(Array.isArray(manifest.music)?manifest.music:[]).map(normalizeMemoryAsset).filter(x=>x && x.url.startsWith("/app/background/music/"));
-  const preferred=String(memoryConfig.musicFile||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
-  const wanted=preferred.replace(/^public\/app\/background\/music\/?/i,"").replace(/^app\/background\/music\/?/i,"");
-  const chosen=preferred ? tracks.find(x=>x.name===preferred || x.relativePath===wanted || x.url.endsWith("/"+wanted.split("/").map(encodeURIComponent).join("/"))) : null;
-  const audio=chosen || tracks[0] || null;
-  return {photos:photos.length?photos:MEMORY_DEMO_PHOTOS,music:audio?audio.url:""};
-}
-async function initMemoryBackground(){
-  // Draw bundled sample tiles immediately, so the background remains graceful if a manifest is missing.
-  renderMemoryBackground(MEMORY_DEMO_PHOTOS);
-  const assets=await loadMemoryGalleryConfig();
-  renderMemoryBackground(assets.photos);
-  memoryMusicUrl=assets.music||"";
-  setMusicButtonState("muted");
-  if(memoryMusicUrl){
-    // Autoplay is best-effort. Telegram/WebView policies may require the user to tap the music control.
-    memoryAudio=new Audio(memoryMusicUrl); memoryAudio.loop=true; memoryAudio.preload="none"; memoryAudio.volume=.18;
-    try{await memoryAudio.play();memoryMusicStarted=true;setMusicButtonState("playing");}
-    catch(_){setMusicButtonState("muted");}
-  }
-}
-let memoryResizeTimer=0;
-window.addEventListener("resize",()=>{
-  clearTimeout(memoryResizeTimer);
-  memoryResizeTimer=setTimeout(()=>{ if(memoryImages && memoryImages.length) renderMemoryBackground(memoryImages); },180);
-});
 
 /* ───────────── data helpers ───────────── */
 const node = (id) => S.data && S.data.nodes[String(id)];
@@ -1226,9 +1102,12 @@ window.addEventListener("storage", (e) => { if (e.key === "lib:cart") { S.cart =
 /* ───────────── boot ───────────── */
 try { if (tg) { tg.ready(); tg.expand(); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } } catch(_) {}
 applyTheme();
-initMemoryBackground();
 loadContent();
 })();
+</script>
+<script type="module">
+// Decorative scrolling photo background + optional music. Independent of the app above: any failure here is ignored.
+try { import("./background/gallery.js?v=1").then((m) => m.startBackground()).catch(() => {}); } catch (_) {}
 </script>
 </body>
 </html>
