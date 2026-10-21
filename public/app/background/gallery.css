@@ -1,0 +1,78 @@
+/* Decorative scrolling photo background. Nothing here changes layout or colors of the app unless <html> has .has-bg. */
+
+.bg-layer{
+  position:fixed; inset:0; z-index:-1; overflow:hidden;
+  pointer-events:none; user-select:none; -webkit-user-select:none;
+  opacity:0; transition:opacity .8s ease;
+  contain:strict;
+}
+.bg-layer.ready{opacity:1}
+
+.bg-grid{
+  position:absolute; inset:0; display:flex; gap:8px;
+  /* a little larger than the screen so rotated/offset tiles never show an edge */
+}
+.bg-col{flex:1 1 0; min-width:0; height:100%; overflow:hidden; position:relative}
+
+.bg-track{
+  display:flow-root; width:100%;
+  will-change:transform; backface-visibility:hidden;
+  animation:bg-scroll var(--bg-dur,40s) linear infinite;
+  animation-delay:var(--bg-delay,0s);
+}
+.bg-track[data-dir="down"]{animation-direction:reverse}
+
+/* every tile carries its own bottom margin, so the two halves of a track are exactly the same height -> seamless at -50% */
+.bg-tile{
+  display:block; width:100%; height:auto; margin:0 0 8px;
+  object-fit:cover; border-radius:12px;
+  background:rgba(120,140,180,.22);
+  -webkit-user-drag:none; pointer-events:none;
+}
+.bg-tile.bad{opacity:0}                      /* missing / broken image: keeps its size, shows nothing */
+
+@keyframes bg-scroll{
+  from{transform:translate3d(0,0,0)}
+  to{transform:translate3d(0,-50%,0)}
+}
+
+/* Royal Blue tint + a theme-aware softening layer so text stays readable on top */
+.bg-tint{position:absolute; inset:0; background:rgba(29,78,216,var(--bg-tint,.34)); mix-blend-mode:normal}
+.bg-dim{position:absolute; inset:0; background:rgba(246,248,253,.72)}
+:root[data-theme="dark"] .bg-dim{background:rgba(7,10,18,.74)}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .bg-dim{background:rgba(7,10,18,.74)}
+}
+
+/* The page itself must be see-through for the fixed layer (z-index:-1) to show behind it. */
+html.has-bg,
+html.has-bg body{background:transparent}
+html.has-bg{background-color:var(--bg)}      /* fallback color only paints behind the layer, never over it */
+
+/* header and cards: very slightly translucent, only while the background is on */
+html.has-bg .top{
+  background:color-mix(in srgb,var(--bg) 86%,transparent);
+  -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+}
+html.has-bg .node,
+html.has-bg .file,
+html.has-bg .fb,
+html.has-bg .note,
+html.has-bg .url,
+html.has-bg .citem,
+html.has-bg .demo-page{
+  background:color-mix(in srgb,var(--card) 90%,transparent);
+}
+
+/* music button: same look as the theme toggle (.iconbtn) */
+#musicBtn[hidden]{display:none!important}
+#musicBtn svg{display:block;margin:auto}
+#musicBtn[data-state="playing"]{color:var(--accent)}
+
+@media (prefers-reduced-motion:reduce){
+  .bg-track{animation:none!important; transform:none!important}
+  .bg-layer{transition:none}
+}
+
+/* the footer fades into --bg; with the background on, let the photos show through instead of a solid band */
+html.has-bg .zm-footer{background:none}
