@@ -1,3 +1,0 @@
-# Photos and music are served from GitHub, not from this app: keep them out of the uploaded static assets.
-app/background/photos/
-app/background/music/
