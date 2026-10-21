@@ -17,7 +17,7 @@
   "tileAspect": 0.75,
   "backgroundOpacity": 0.99,
   "cardOpacity": 1,
-  "tintOpacity": 0.05,
+  "tintOpacity": 0.01,
 
   "musicFile": "",
   "musicVolume": 0.18,
